@@ -1,0 +1,15 @@
+{
+  "dataDir": "/Users/rhaq/workspace/big-pump-bird/data",
+  "dbPath": "/Users/rhaq/workspace/big-pump-bird/data/bpb.sqlite",
+  "modelPath": "large-v3",
+  "autoDownloadModel": true,
+  "modelDownloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+  "language": "en",
+  "jobs": 1,
+  "keepWav": false,
+  "downloadVideo": false,
+  "keepSourceAudio": true,
+  "sourceAudioFormat": "opus-webm",
+  "sourceAudioMaxAbrKbps": 128,
+  "outputFormats": ["txt", "json"]
+}

@@ -1,0 +1,10 @@
+node_modules/
+.bun/
+.DS_Store
+/data/
+/sample/
+/models/
+*.log
+.venv/
+.venv-whisperx311/
+__pycache__/
