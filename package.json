@@ -9,6 +9,7 @@
     "bugs": {
         "url": "https://github.com/ragaeeb/big-plump-bird/issues"
     },
+    "dependencies": {},
     "description": "Local-first Bun + WhisperX transcription pipeline for mixed Arabic and English media.",
     "devDependencies": {
         "@biomejs/biome": "^2.3.14",
@@ -37,9 +38,30 @@
         "url": "git+https://github.com/ragaeeb/big-plump-bird.git"
     },
     "scripts": {
+        "api:dev": "bun src/web-api/server.ts",
         "bpb": "bun src/cli.ts",
         "dev": "bun src/cli.ts --help",
-        "start": "bun src/cli.ts"
+        "dev:web": "bun scripts/dev-web.ts",
+        "format": "biome format --write .",
+        "lint": "biome check .",
+        "lint:fix": "biome check --write .",
+        "lint:staged": "bun scripts/lint-staged.ts",
+        "postinstall": "bun run setup-git-hooks || true; bun run setup-enhance || true",
+        "setup": "bun scripts/setup.ts",
+        "setup-enhance": "bun scripts/setup-enhance.ts",
+        "setup-git-hooks": "bun scripts/setup-git-hooks.ts",
+        "setup-web": "cd apps/web && bun install",
+        "setup-whisperx": "bun scripts/setup-whisperx.ts",
+        "setup:doctor": "bun scripts/setup-doctor.ts",
+        "setup:full": "bun scripts/setup.ts --strict",
+        "start": "bun src/cli.ts",
+        "test": "bun test",
+        "test:e2e": "BPB_RUN_REAL_E2E=1 bun test tests/e2e/youtube-url.e2e.test.ts --max-concurrency=1",
+        "test:integration": "bun test tests/integration --max-concurrency=1",
+        "test:integration:real": "BPB_RUN_REAL_INTEGRATION=1 bun test tests/integration/real-whisperx.integration.test.ts --max-concurrency=1",
+        "web:build": "cd apps/web && bun run build",
+        "web:dev": "cd apps/web && bun node_modules/vite/bin/vite.js --host",
+        "web:preview": "cd apps/web && bun run preview --host"
     },
     "type": "module",
     "version": "0.1.0"
