@@ -180,6 +180,9 @@ The `Release Please` workflow runs on pushes to `main` and opens/updates a relea
 
 The `PR Title Semver` workflow validates PR titles use Conventional Commit types so squash-merge titles can drive release bumps cleanly.
 
+If your repo disables PR creation by `GITHUB_TOKEN`, set a `RELEASE_PLEASE_TOKEN` secret (PAT with `repo` scope) for the workflow, or enable:
+`Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests`.
+
 ## Docs
 
 - WhisperKit proposal: [docs/whisperkit.md](docs/whisperkit.md)

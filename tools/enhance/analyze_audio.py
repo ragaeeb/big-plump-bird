@@ -133,6 +133,12 @@ def main():
     ap.add_argument("--min-silence-ms", type=int, default=500)
     ap.add_argument("--max-regimes", type=int, default=8)
     args = ap.parse_args()
+    if not 0.0 <= args.vad_threshold <= 1.0:
+        ap.error("--vad-threshold must be between 0 and 1")
+    if args.min_silence_ms < 0:
+        ap.error("--min-silence-ms must be >= 0")
+    if args.max_regimes < 1:
+        ap.error("--max-regimes must be >= 1")
 
     t0 = time.monotonic()
 
@@ -236,7 +242,7 @@ def main():
     for pkg in ("torch", "torchaudio", "silero-vad", "numpy", "soundfile", "ruptures", "scipy"):
         try:
             versions[pkg] = importlib.metadata.version(pkg)
-        except Exception:
+        except importlib.metadata.PackageNotFoundError:
             pass
 
     result = {

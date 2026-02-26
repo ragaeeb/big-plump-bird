@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
-import { stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { extname } from 'node:path';
+import { pathExists } from '../core/utils';
 
 export type TranscriptListItem = {
     videoId: string;
@@ -23,6 +24,11 @@ export type TranscriptWord = {
     b: number;
     e: number;
     w: string;
+};
+
+export type TranscriptChannel = {
+    channel: string | null;
+    channelId: string;
 };
 
 export type AudioSource = {
@@ -84,7 +90,14 @@ type AudioRow = {
     kind: string;
 };
 
+type TranscriptChannelRow = {
+    channel: string | null;
+    channel_id: string;
+};
+
 const AUDIO_ARTIFACT_KINDS = ['source_audio', 'audio_wav_enhanced', 'audio_wav'];
+const AUDIO_SOURCE_CACHE_TTL_MS = 30_000;
+const audioSourceCache = new Map<string, { expiresAt: number; value: AudioSource | null }>();
 
 export function listTranscriptions(
     db: Database,
@@ -100,14 +113,19 @@ export function listTranscriptions(
     if (query.length > 0) {
         conditions.push(`(
                 LOWER(COALESCE(v.title, '')) LIKE LOWER(?)
-                OR LOWER(COALESCE(t.text, '')) LIKE LOWER(?)
                 OR LOWER(COALESCE(v.source_uri, '')) LIKE LOWER(?)
                 OR LOWER(COALESCE(v.description, '')) LIKE LOWER(?)
                 OR LOWER(COALESCE(v.channel, '')) LIKE LOWER(?)
                 OR LOWER(COALESCE(v.channel_id, '')) LIKE LOWER(?)
+                OR EXISTS (
+                    SELECT 1
+                    FROM segments_fts
+                    WHERE segments_fts.video_id = t.video_id
+                    AND segments_fts MATCH ?
+                )
             )`);
         const like = `%${query}%`;
-        values.push(like, like, like, like, like, like);
+        values.push(like, like, like, like, like, buildFtsMatchQuery(query));
     }
 
     if (channelId.length > 0) {
@@ -169,6 +187,28 @@ export function listTranscriptions(
     }));
 }
 
+export function listTranscriptChannels(db: Database): TranscriptChannel[] {
+    const rows = db
+        .query(
+            `
+            SELECT
+                v.channel_id,
+                MAX(v.channel) AS channel
+            FROM transcripts t
+            JOIN videos v ON v.video_id = t.video_id
+            WHERE COALESCE(v.channel_id, '') <> ''
+            GROUP BY v.channel_id
+            ORDER BY LOWER(COALESCE(MAX(v.channel), v.channel_id)) ASC;
+            `,
+        )
+        .all() as TranscriptChannelRow[];
+
+    return rows.map((row) => ({
+        channel: row.channel,
+        channelId: row.channel_id,
+    }));
+}
+
 export function getTranscriptDetail(db: Database, videoId: string): TranscriptDetail | null {
     const row = db
         .query(
@@ -217,26 +257,38 @@ export function getTranscriptDetail(db: Database, videoId: string): TranscriptDe
 }
 
 export async function resolveAudioSource(db: Database, videoId: string): Promise<AudioSource | null> {
+    const now = Date.now();
+    const cached = audioSourceCache.get(videoId);
+    if (cached && cached.expiresAt > now) {
+        return cached.value;
+    }
+
     const candidates = getAudioCandidates(db, videoId);
     for (const candidate of candidates) {
-        if (!(await fileExists(candidate.uri))) {
+        if (!(await pathExists(candidate.uri))) {
             continue;
         }
-        return {
+        const source = {
             kind: candidate.kind,
             mimeType: guessMimeType(candidate.uri),
             path: candidate.uri,
         };
+        audioSourceCache.set(videoId, { expiresAt: now + AUDIO_SOURCE_CACHE_TTL_MS, value: source });
+        return source;
     }
+
+    audioSourceCache.set(videoId, { expiresAt: now + AUDIO_SOURCE_CACHE_TTL_MS, value: null });
     return null;
 }
 
 function getAudioKind(db: Database, videoId: string): string | null {
     const candidates = getAudioCandidates(db, videoId);
-    if (candidates.length === 0) {
-        return null;
+    for (const candidate of candidates) {
+        if (existsSync(candidate.uri)) {
+            return candidate.kind;
+        }
     }
-    return candidates[0].kind;
+    return null;
 }
 
 function getAudioCandidates(db: Database, videoId: string): AudioRow[] {
@@ -276,6 +328,15 @@ function getAudioCandidates(db: Database, videoId: string): AudioRow[] {
             uri: localRow.local_path,
         },
     ];
+}
+
+function buildFtsMatchQuery(query: string): string {
+    return query
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((term) => `"${term.replaceAll('"', '""')}"`)
+        .join(' ');
 }
 
 function parseCompactWords(jsonText: string): TranscriptWord[] {
@@ -321,15 +382,6 @@ function parseCompactWords(jsonText: string): TranscriptWord[] {
         return words;
     } catch {
         return [];
-    }
-}
-
-async function fileExists(path: string): Promise<boolean> {
-    try {
-        await stat(path);
-        return true;
-    } catch {
-        return false;
     }
 }
 

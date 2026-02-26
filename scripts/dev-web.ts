@@ -83,7 +83,7 @@ async function chooseApiPort(): Promise<string> {
         }
     }
 
-    return '8787';
+    throw new Error('[dev-web] No available ports found in range [8787, 8799-8802]');
 }
 
 async function isPortAvailable(port: number): Promise<boolean> {

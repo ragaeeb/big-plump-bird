@@ -15,10 +15,14 @@ export function formatDate(value: string | null): string {
     if (!value) {
         return '-';
     }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '-';
+    }
     return new Intl.DateTimeFormat(undefined, {
         dateStyle: 'short',
         timeStyle: 'short',
-    }).format(new Date(value));
+    }).format(date);
 }
 
 export function formatTimestampMs(ms: number): string {

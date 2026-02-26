@@ -24,7 +24,21 @@ export function JobQueueRoute() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {(jobsQuery.data ?? []).length === 0 ? (
+                        {jobsQuery.isLoading ? (
+                            <TableRow>
+                                <TableCell className="text-muted-foreground" colSpan={4}>
+                                    Loading jobs...
+                                </TableCell>
+                            </TableRow>
+                        ) : jobsQuery.isError ? (
+                            <TableRow>
+                                <TableCell className="text-destructive" colSpan={4}>
+                                    {jobsQuery.error instanceof Error
+                                        ? jobsQuery.error.message
+                                        : 'Failed to load jobs.'}
+                                </TableCell>
+                            </TableRow>
+                        ) : (jobsQuery.data ?? []).length === 0 ? (
                             <TableRow>
                                 <TableCell className="text-muted-foreground" colSpan={4}>
                                     No jobs in queue.

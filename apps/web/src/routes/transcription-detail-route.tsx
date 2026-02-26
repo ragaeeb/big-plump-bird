@@ -204,11 +204,12 @@ export function TranscriptionDetailRoute() {
                                             {transcriptDetailQuery.data.words.map((word, index) => (
                                                 <button
                                                     className={cn(
-                                                        'rounded px-2 py-1 text-sm font-medium transition-colors cursor-pointer',
+                                                        'cursor-pointer rounded px-2 py-1 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                                                         index === activeWordIndex
                                                             ? 'bg-primary text-primary-foreground shadow-sm'
                                                             : 'text-foreground/80 hover:bg-primary/10 hover:text-primary',
                                                     )}
+                                                    disabled={!audioUrl}
                                                     key={`${word.b}-${word.e}-${index}`}
                                                     onClick={() => {
                                                         const audio = audioRef.current;

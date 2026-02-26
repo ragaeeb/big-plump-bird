@@ -54,15 +54,17 @@ function SidebarProvider({
     const open = openProp ?? _open;
     const setOpen = React.useCallback(
         (value: boolean | ((value: boolean) => boolean)) => {
-            const openState = typeof value === 'function' ? value(open) : value;
             if (setOpenProp) {
+                const openState = typeof value === 'function' ? value(open) : value;
                 setOpenProp(openState);
+                document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
             } else {
-                _setOpen(openState);
+                _setOpen((currentOpen) => {
+                    const openState = typeof value === 'function' ? value(currentOpen) : value;
+                    document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+                    return openState;
+                });
             }
-
-            // This sets the cookie to keep the sidebar state.
-            document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
         },
         [setOpenProp, open],
     );
@@ -75,6 +77,12 @@ function SidebarProvider({
     // Adds a keyboard shortcut to toggle the sidebar.
     React.useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null;
+            const isEditable = !!target?.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
+            if (isEditable) {
+                return;
+            }
+
             if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
                 toggleSidebar();
@@ -167,7 +175,7 @@ function Sidebar({
                     'group-data-[collapsible=offcanvas]:w-0',
                     'group-data-[side=right]:rotate-180',
                     variant === 'floating' || variant === 'inset'
-                        ? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]'
+                        ? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+1rem)]'
                         : 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)',
                 )}
             />
@@ -180,7 +188,7 @@ function Sidebar({
                         : 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
                     // Adjust the padding for floating and inset variants.
                     variant === 'floating' || variant === 'inset'
-                        ? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
+                        ? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+1rem+2px)]'
                         : 'group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l',
                     className,
                 )}
@@ -228,7 +236,8 @@ function SidebarRail({ className, ...props }: React.ComponentProps<'button'>) {
             data-sidebar="rail"
             data-slot="sidebar-rail"
             aria-label="Toggle Sidebar"
-            tabIndex={-1}
+            tabIndex={0}
+            type="button"
             onClick={toggleSidebar}
             title="Toggle Sidebar"
             className={cn(
@@ -355,6 +364,7 @@ function SidebarGroupAction({
     ...props
 }: React.ComponentProps<'button'> & { asChild?: boolean }) {
     const Comp = asChild ? Slot.Root : 'button';
+    const resolvedProps = asChild ? props : { type: 'button' as const, ...props };
 
     return (
         <Comp
@@ -367,7 +377,7 @@ function SidebarGroupAction({
                 'group-data-[collapsible=icon]:hidden',
                 className,
             )}
-            {...props}
+            {...resolvedProps}
         />
     );
 }
@@ -442,6 +452,7 @@ function SidebarMenuButton({
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
     const Comp = asChild ? Slot.Root : 'button';
     const { state } = useSidebar();
+    const resolvedProps = asChild ? props : { type: 'button' as const, ...props };
 
     const button = (
         <Comp
@@ -450,7 +461,7 @@ function SidebarMenuButton({
             data-size={size}
             data-active={isActive}
             className={cn(sidebarMenuButtonVariants({ size, variant }), className)}
-            {...props}
+            {...resolvedProps}
         />
     );
 
@@ -482,6 +493,7 @@ function SidebarMenuAction({
     showOnHover?: boolean;
 }) {
     const Comp = asChild ? Slot.Root : 'button';
+    const resolvedProps = asChild ? props : { type: 'button' as const, ...props };
 
     return (
         <Comp
@@ -499,7 +511,7 @@ function SidebarMenuAction({
                     'peer-data-[active=true]/menu-button:text-sidebar-accent-foreground group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100 md:opacity-0',
                 className,
             )}
-            {...props}
+            {...resolvedProps}
         />
     );
 }

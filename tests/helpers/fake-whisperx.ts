@@ -41,7 +41,11 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --*)
-      shift 2
+      if [ "$#" -gt 1 ] && [ "\${2#-}" = "$2" ]; then
+        shift 2
+      else
+        shift
+      fi
       ;;
     *)
       if [ -z "$audio_path" ]; then

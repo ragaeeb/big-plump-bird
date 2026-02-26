@@ -74,9 +74,11 @@ export function AppSidebar({ onRefresh, onViewChange, queuedCount, transcriptCou
             <SidebarHeader>
                 <SidebarMenu>
                     <SidebarMenuItem>
-                        <SidebarMenuButton className="data-[slot=sidebar-menu-button]:!p-1.5">
-                            <img alt="Big Plump Bird" className="size-5 rounded-sm" src="/vite.svg" />
-                            <span className="brand-primary-text text-base font-semibold">Big Plump Bird</span>
+                        <SidebarMenuButton asChild className="data-[slot=sidebar-menu-button]:!p-1.5">
+                            <div>
+                                <img alt="Big Plump Bird" className="size-5 rounded-sm" src="/vite.svg" />
+                                <span className="brand-primary-text text-base font-semibold">Big Plump Bird</span>
+                            </div>
                         </SidebarMenuButton>
                     </SidebarMenuItem>
                 </SidebarMenu>

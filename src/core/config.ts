@@ -76,6 +76,12 @@ export const DEFAULT_CONFIG: RunConfig = {
     whisperxComputeType: 'float32',
 };
 
+const WHISPERX_COMPUTE_TYPES = new Set(['float16', 'float32', 'int8']);
+const ENHANCEMENT_MODES = new Set(['off', 'auto', 'on', 'analyze-only']);
+const SOURCE_CLASSES = new Set(['auto', 'studio', 'podium', 'far-field', 'cassette']);
+const DEREVERB_MODES = new Set(['off', 'auto', 'on']);
+const FAIL_POLICIES = new Set(['fallback_raw', 'fail']);
+
 export async function loadConfig(configPath: string): Promise<RunConfig> {
     const absoluteConfigPath = resolve(configPath);
     const configDir = dirname(absoluteConfigPath);
@@ -85,7 +91,7 @@ export async function loadConfig(configPath: string): Promise<RunConfig> {
     }
     const raw = await Bun.file(absoluteConfigPath).text();
     const parsed = JSON.parse(raw) as Partial<RunConfig & { enhancement?: Partial<EnhancementConfig> }>;
-    return resolveConfigPaths(
+    const merged = resolveConfigPaths(
         {
             ...DEFAULT_CONFIG,
             ...parsed,
@@ -97,6 +103,7 @@ export async function loadConfig(configPath: string): Promise<RunConfig> {
         },
         configDir,
     );
+    return validateConfig(merged);
 }
 
 function resolveConfigPaths(config: RunConfig, configDir: string): RunConfig {
@@ -117,4 +124,74 @@ function resolveFromConfigDir(value: string, configDir: string): string {
         return value;
     }
     return resolve(configDir, value);
+}
+
+function validateConfig(config: RunConfig): RunConfig {
+    if (config.dbPath.trim().length === 0) {
+        throw new Error('Invalid config: dbPath is required.');
+    }
+    if (config.dataDir.trim().length === 0) {
+        throw new Error('Invalid config: dataDir is required.');
+    }
+    if (config.modelPath.trim().length === 0) {
+        throw new Error('Invalid config: modelPath is required.');
+    }
+    if (!WHISPERX_COMPUTE_TYPES.has(config.whisperxComputeType)) {
+        throw new Error(
+            `Invalid config: whisperxComputeType must be one of ${Array.from(WHISPERX_COMPUTE_TYPES).join(', ')}.`,
+        );
+    }
+    if (!Number.isFinite(config.jobs) || config.jobs < 1) {
+        throw new Error('Invalid config: jobs must be a number >= 1.');
+    }
+    if (!Number.isFinite(config.whisperxBatchSize) || config.whisperxBatchSize < 1) {
+        throw new Error('Invalid config: whisperxBatchSize must be a number >= 1.');
+    }
+    if (!Array.isArray(config.outputFormats) || config.outputFormats.length === 0) {
+        throw new Error('Invalid config: outputFormats must be a non-empty array.');
+    }
+
+    if (!ENHANCEMENT_MODES.has(config.enhancement.mode)) {
+        throw new Error(`Invalid config: enhancement.mode must be one of ${Array.from(ENHANCEMENT_MODES).join(', ')}.`);
+    }
+    if (!SOURCE_CLASSES.has(config.enhancement.sourceClass)) {
+        throw new Error(
+            `Invalid config: enhancement.sourceClass must be one of ${Array.from(SOURCE_CLASSES).join(', ')}.`,
+        );
+    }
+    if (!DEREVERB_MODES.has(config.enhancement.dereverbMode)) {
+        throw new Error(
+            `Invalid config: enhancement.dereverbMode must be one of ${Array.from(DEREVERB_MODES).join(', ')}.`,
+        );
+    }
+    if (!FAIL_POLICIES.has(config.enhancement.failPolicy)) {
+        throw new Error(
+            `Invalid config: enhancement.failPolicy must be one of ${Array.from(FAIL_POLICIES).join(', ')}.`,
+        );
+    }
+    if (!Number.isFinite(config.enhancement.attenLimDb)) {
+        throw new Error('Invalid config: enhancement.attenLimDb must be finite.');
+    }
+    if (!Number.isFinite(config.enhancement.snrSkipThresholdDb)) {
+        throw new Error('Invalid config: enhancement.snrSkipThresholdDb must be finite.');
+    }
+    if (
+        !Number.isFinite(config.enhancement.vadThreshold) ||
+        config.enhancement.vadThreshold < 0 ||
+        config.enhancement.vadThreshold > 1
+    ) {
+        throw new Error('Invalid config: enhancement.vadThreshold must be between 0 and 1.');
+    }
+    if (!Number.isFinite(config.enhancement.minSilenceMs) || config.enhancement.minSilenceMs < 0) {
+        throw new Error('Invalid config: enhancement.minSilenceMs must be >= 0.');
+    }
+    if (!Number.isFinite(config.enhancement.maxRegimes) || config.enhancement.maxRegimes < 1) {
+        throw new Error('Invalid config: enhancement.maxRegimes must be >= 1.');
+    }
+
+    return {
+        ...config,
+        jobs: Math.max(1, Math.round(config.jobs)),
+        whisperxBatchSize: Math.max(1, Math.round(config.whisperxBatchSize)),
+    };
 }

@@ -65,6 +65,11 @@ export type TranscriptListItem = {
     hasAudio: boolean;
 };
 
+export type TranscriptChannel = {
+    channel: string | null;
+    channelId: string;
+};
+
 export type TranscriptDetail = {
     videoId: string;
     title: string | null;
@@ -268,6 +273,11 @@ export async function getTranscriptions(options?: {
 
     const response = await request<{ transcripts: TranscriptListItem[] }>(`/api/transcripts?${params.toString()}`);
     return response.transcripts;
+}
+
+export async function getTranscriptChannels(): Promise<TranscriptChannel[]> {
+    const response = await request<{ channels: TranscriptChannel[] }>('/api/channels');
+    return response.channels;
 }
 
 export async function getTranscriptById(videoId: string): Promise<TranscriptDetail> {

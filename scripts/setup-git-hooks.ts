@@ -1,4 +1,5 @@
-import { chmod } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 async function run(cmd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -19,6 +20,11 @@ async function main(): Promise<void> {
     }
 
     const hookPath = resolve('.githooks', 'pre-commit');
+    try {
+        await access(hookPath, constants.F_OK);
+    } catch {
+        throw new Error(`Hook file not found: ${hookPath}`);
+    }
     await chmod(hookPath, 0o755);
 
     const config = await run('git', ['config', 'core.hooksPath', '.githooks']);

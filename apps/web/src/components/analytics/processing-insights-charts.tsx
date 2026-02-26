@@ -38,9 +38,9 @@ export function ProcessingInsightsCharts({ analytics }: { analytics: AnalyticsPa
     const enhancementTimingSeries = analytics.enhancementMetrics
         .filter((point) => point.analysisDurationMs !== null || point.processingMs !== null)
         .map((point, index) => ({
-            analysisSeconds: point.analysisDurationMs ? round2(point.analysisDurationMs / 1000) : 0,
+            analysisSeconds: point.analysisDurationMs !== null ? round2(point.analysisDurationMs / 1000) : null,
             index: String(index + 1),
-            processingSeconds: point.processingMs ? round2(point.processingMs / 1000) : 0,
+            processingSeconds: point.processingMs !== null ? round2(point.processingMs / 1000) : null,
             runId: point.runId,
             videoId: point.videoId,
         }));
