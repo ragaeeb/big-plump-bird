@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 
 export type CommandResult = {
@@ -10,15 +9,30 @@ export type CommandResult = {
 
 const STREAM_CAPTURE_LIMIT = 64 * 1024;
 
-function appendTail(current: string, chunk: string, limit: number): string {
+function pushCappedChunk(chunks: string[], chunk: string, currentLength: number, limit: number): number {
     if (chunk.length >= limit) {
-        return chunk.slice(-limit);
+        chunks.length = 0;
+        chunks.push(chunk.slice(-limit));
+        return limit;
     }
-    const merged = current + chunk;
-    if (merged.length <= limit) {
-        return merged;
+
+    chunks.push(chunk);
+    let nextLength = currentLength + chunk.length;
+
+    while (nextLength > limit && chunks.length > 0) {
+        const overflow = nextLength - limit;
+        const first = chunks[0];
+        if (first.length <= overflow) {
+            chunks.shift();
+            nextLength -= first.length;
+            continue;
+        }
+
+        chunks[0] = first.slice(overflow);
+        nextLength -= overflow;
     }
-    return merged.slice(merged.length - limit);
+
+    return nextLength;
 }
 
 async function streamToProcessAndCapture(
@@ -30,7 +44,8 @@ async function streamToProcessAndCapture(
     }
     const reader = stream.getReader();
     const decoder = new TextDecoder();
-    let captured = '';
+    const capturedChunks: string[] = [];
+    let capturedLength = 0;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -42,16 +57,16 @@ async function streamToProcessAndCapture(
         }
         const chunk = decoder.decode(value, { stream: true });
         writeChunk(chunk);
-        captured = appendTail(captured, chunk, STREAM_CAPTURE_LIMIT);
+        capturedLength = pushCappedChunk(capturedChunks, chunk, capturedLength, STREAM_CAPTURE_LIMIT);
     }
 
     const finalChunk = decoder.decode();
     if (finalChunk.length > 0) {
         writeChunk(finalChunk);
-        captured = appendTail(captured, finalChunk, STREAM_CAPTURE_LIMIT);
+        capturedLength = pushCappedChunk(capturedChunks, finalChunk, capturedLength, STREAM_CAPTURE_LIMIT);
     }
 
-    return captured;
+    return capturedChunks.join('');
 }
 
 export async function runCommand(
@@ -100,16 +115,6 @@ export async function pathExists(path: string): Promise<boolean> {
     } catch {
         return false;
     }
-}
-
-export async function sha256File(filePath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const hash = createHash('sha256');
-        const stream = createReadStream(filePath);
-        stream.on('error', reject);
-        stream.on('data', (chunk) => hash.update(chunk));
-        stream.on('end', () => resolve(hash.digest('hex')));
-    });
 }
 
 export function sha256String(input: string): string {

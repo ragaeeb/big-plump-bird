@@ -49,6 +49,18 @@ type ParsedArgs = {
     positionals: string[];
 };
 
+const NUMERIC_FLAGS = new Set([
+    'enhance-atten-lim-db',
+    'enhance-snr-threshold',
+    'jobs',
+    'limit',
+    'whisperx-batch-size',
+]);
+
+function isNumericLiteral(value: string): boolean {
+    return /^-?\d+(\.\d+)?$/.test(value.trim());
+}
+
 function parseArgs(args: string[]): ParsedArgs {
     const flags: Record<string, string | string[] | boolean> = {};
     const positionals: string[] = [];
@@ -67,12 +79,18 @@ function parseArgs(args: string[]): ParsedArgs {
         }
 
         if (arg.startsWith('--')) {
-            const [key, inlineValue] = arg.slice(2).split('=', 2);
+            const eqIdx = arg.indexOf('=');
+            const key = eqIdx === -1 ? arg.slice(2) : arg.slice(2, eqIdx);
+            const inlineValue = eqIdx === -1 ? undefined : arg.slice(eqIdx + 1);
             let value: string | boolean | undefined = inlineValue;
 
-            if (value === undefined && i + 1 < args.length && !args[i + 1].startsWith('-')) {
-                value = args[i + 1];
-                i += 1;
+            if (value === undefined && i + 1 < args.length) {
+                const nextArg = args[i + 1];
+                const canUseNext = !nextArg.startsWith('-') || (NUMERIC_FLAGS.has(key) && isNumericLiteral(nextArg));
+                if (canUseNext) {
+                    value = nextArg;
+                    i += 1;
+                }
             }
 
             if (value === undefined) {
@@ -80,7 +98,7 @@ function parseArgs(args: string[]): ParsedArgs {
             }
 
             const existing = flags[key];
-            if (existing) {
+            if (existing !== undefined) {
                 if (Array.isArray(existing)) {
                     existing.push(String(value));
                 } else {
@@ -98,17 +116,17 @@ function parseArgs(args: string[]): ParsedArgs {
     return { command, flags, positionals };
 }
 
-function toArray(value: string | string[] | boolean | undefined): string[] {
+function toArray(value: string | string[] | boolean | undefined, splitComma = false): string[] {
     if (!value) {
         return [];
     }
     if (Array.isArray(value)) {
-        return value.flatMap((v) => v.split(','));
+        return splitComma ? value.flatMap((v) => v.split(',')) : value;
     }
     if (typeof value === 'boolean') {
         return [];
     }
-    return value.split(',');
+    return splitComma ? value.split(',') : [value];
 }
 
 function toBoolean(value: string | string[] | boolean | undefined, defaultValue: boolean): boolean {
@@ -136,7 +154,7 @@ function toNumber(value: string | string[] | boolean | undefined, defaultValue: 
         return defaultValue;
     }
     const raw = Array.isArray(value) ? value[value.length - 1] : value;
-    const parsed = Number.parseInt(raw, 10);
+    const parsed = Number.parseFloat(raw);
     return Number.isNaN(parsed) ? defaultValue : parsed;
 }
 
@@ -183,7 +201,10 @@ async function main() {
         autoDownloadModel: toBoolean(parsed.flags['auto-download-model'], baseConfig.autoDownloadModel),
         downloadVideo: toBoolean(parsed.flags['download-video'], baseConfig.downloadVideo),
         enhancement,
-        jobs: toNumber(parsed.flags.jobs, baseConfig.jobs),
+        jobs: (() => {
+            const parsedJobs = toNumber(parsed.flags.jobs, baseConfig.jobs);
+            return Number.isFinite(parsedJobs) ? Math.max(1, Math.round(parsedJobs)) : Math.max(1, baseConfig.jobs);
+        })(),
         keepSourceAudio: toBoolean(parsed.flags['keep-source-audio'], baseConfig.keepSourceAudio),
         keepWav: toBoolean(parsed.flags['keep-wav'], baseConfig.keepWav),
         language: typeof parsed.flags.language === 'string' ? parsed.flags.language : baseConfig.language,
@@ -193,7 +214,7 @@ async function main() {
                 : baseConfig.modelDownloadUrl,
         modelPath: typeof parsed.flags.model === 'string' ? parsed.flags.model : baseConfig.modelPath,
         outputFormats: (() => {
-            const provided = toArray(parsed.flags['output-formats']);
+            const provided = toArray(parsed.flags['output-formats'], true);
             if (provided.length === 0) {
                 return baseConfig.outputFormats;
             }
@@ -207,7 +228,6 @@ async function main() {
     };
 
     if (parsed.command === 'run') {
-        const runConfig = await ensureModelReady(config);
         const paths = toArray(parsed.flags.paths)
             .map((p) => resolve(p.trim()))
             .filter(Boolean);
@@ -223,16 +243,33 @@ async function main() {
             typeof parsed.flags['enhance-plan-out'] === 'string'
                 ? resolve(parsed.flags['enhance-plan-out'])
                 : undefined;
+        const runConfig = dryRun ? config : await ensureModelReady(config);
+        let interrupted = false;
+        const handleSignal = (signal: NodeJS.Signals) => {
+            interrupted = true;
+            console.error(`Received ${signal}. Waiting for active work to finish...`);
+        };
+        process.once('SIGINT', handleSignal);
+        process.once('SIGTERM', handleSignal);
 
-        await runPipeline(runConfig, {
-            dryRun,
-            enhancePlanIn,
-            enhancePlanOut,
-            force,
-            paths,
-            urls,
-            urlsFile,
-        });
+        try {
+            await runPipeline(runConfig, {
+                dryRun,
+                enhancePlanIn,
+                enhancePlanOut,
+                force,
+                paths,
+                urls,
+                urlsFile,
+            });
+        } finally {
+            process.off('SIGINT', handleSignal);
+            process.off('SIGTERM', handleSignal);
+        }
+
+        if (interrupted) {
+            process.exitCode = 130;
+        }
         return;
     }
 
@@ -245,17 +282,22 @@ async function main() {
         }
         const limit = toNumber(parsed.flags.limit, 10);
         const db = await openDb(config.dbPath);
-        const results = searchSegments(db, query, limit);
-        for (const row of results) {
-            const start = formatTimestamp(row.start_ms);
-            const end = formatTimestamp(row.end_ms);
-            console.log(`${row.video_id} [${start} - ${end}] ${row.text}`);
+        try {
+            const results = searchSegments(db, query, limit);
+            for (const row of results) {
+                const start = formatTimestamp(row.start_ms);
+                const end = formatTimestamp(row.end_ms);
+                console.log(`${row.video_id} [${start} - ${end}] ${row.text}`);
+            }
+        } finally {
+            db.close(false);
         }
         return;
     }
 
-    console.log(`Unknown command: ${parsed.command}\n`);
-    console.log(HELP);
+    console.error(`Unknown command: ${parsed.command}\n`);
+    console.error(HELP);
+    process.exitCode = 1;
 }
 
 main().catch((error) => {

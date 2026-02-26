@@ -98,6 +98,8 @@ function DailyTable({ data }: { data: AnalyticsPoint[] }) {
         onSortingChange: setSorting,
         state: { columnFilters, columnVisibility, pagination, rowSelection, sorting },
     });
+    const pageCount = Math.max(1, table.getPageCount());
+    const currentPage = Math.min(table.getState().pagination.pageIndex + 1, pageCount);
 
     return (
         <div className="flex flex-col gap-4">
@@ -163,7 +165,7 @@ function DailyTable({ data }: { data: AnalyticsPoint[] }) {
                         </Select>
                     </div>
                     <div className="flex w-fit items-center justify-center text-sm font-medium">
-                        Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+                        Page {currentPage} of {pageCount}
                     </div>
                     <div className="ml-auto flex items-center gap-2 lg:ml-0">
                         <Button
@@ -200,7 +202,7 @@ function DailyTable({ data }: { data: AnalyticsPoint[] }) {
                             variant="outline"
                             className="hidden size-8 lg:flex"
                             size="icon"
-                            onClick={() => table.setPageIndex(table.getPageCount() - 1)}
+                            onClick={() => table.setPageIndex(pageCount - 1)}
                             disabled={!table.getCanNextPage()}
                         >
                             <span className="sr-only">Last page</span>
@@ -260,15 +262,17 @@ function DistributionTable({ data, emptyMessage }: { data: AnalyticsDistribution
 // ── Main DataTable ────────────────────────────────────────────────────────────
 
 export function AnalyticsDataTable({ analytics }: { analytics: AnalyticsPayload }) {
+    const [activeTab, setActiveTab] = React.useState('daily');
+
     return (
-        <Tabs defaultValue="daily" className="w-full flex-col justify-start gap-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-col justify-start gap-6">
             {/* Toolbar */}
             <div className="flex items-center justify-between">
                 {/* Mobile: select */}
                 <Label htmlFor="tab-selector" className="sr-only">
                     View
                 </Label>
-                <Select defaultValue="daily">
+                <Select value={activeTab} onValueChange={setActiveTab}>
                     <SelectTrigger className="flex w-fit @4xl/main:hidden" size="sm" id="tab-selector">
                         <SelectValue placeholder="Select a view" />
                     </SelectTrigger>

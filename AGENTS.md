@@ -74,7 +74,7 @@
 - Enhancement venv (optional, only if `--enhance` is not `off`):
   - Requires **uv** on PATH (https://docs.astral.sh/uv/).
   - Reproducible setup: `bun run setup-enhance` (uv creates `tools/enhance/.venv`, installs `tools/enhance/requirements.txt`, and installs `deep-filter` binary under `tools/enhance/bin/`)
-  - `postinstall` runs `setup-enhance` best-effort (`|| true`) so install succeeds even without uv/Python
+  - `postinstall` now runs setup helpers once per fresh `node_modules` tree (sentinel in `node_modules/.cache/`), then skips on subsequent installs/updates (for example `bun update --latest`)
   - For full runtime setup (enhancement + WhisperX): `bun run setup`
 
 ## Expected Behavior

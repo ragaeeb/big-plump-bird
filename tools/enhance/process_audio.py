@@ -34,8 +34,17 @@ def _resample_audio(audio: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     return resample_poly(audio, up, down).astype(np.float32)
 
 
-def _run_cmd(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+def _run_cmd(args: list[str], timeout_sec: int = 300) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Command timed out: {args[0]}") from exc
 
 
 def _apply_deepfilter(
@@ -263,7 +272,7 @@ def main():
     for pkg in ("nara-wpe", "numpy", "soundfile", "scipy"):
         try:
             versions[pkg] = importlib.metadata.version(pkg)
-        except Exception:
+        except importlib.metadata.PackageNotFoundError:
             pass
     versions["deep-filter"] = deep_filter_version
 

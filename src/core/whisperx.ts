@@ -50,7 +50,8 @@ async function runWhisperxCommand(args: string[]): Promise<void> {
             if (result.exitCode === 0) {
                 return;
             }
-            errors.push(`${command}: exit ${result.exitCode}`);
+            const detail = result.stderr.trim() || result.stdout.trim();
+            errors.push(`${command}: exit ${result.exitCode}${detail ? ` (${detail})` : ''}`);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             errors.push(`${command}: ${message}`);
@@ -71,7 +72,8 @@ export async function ensureWhisperXAvailable(): Promise<void> {
         try {
             const result = await runCommand(command, ['--version'], { env: whisperEnv });
             if (result.exitCode !== 0) {
-                errors.push(`${command}: exit ${result.exitCode}`);
+                const detail = result.stderr.trim() || result.stdout.trim();
+                errors.push(`${command}: exit ${result.exitCode}${detail ? ` (${detail})` : ''}`);
                 continue;
             }
 
@@ -103,7 +105,7 @@ export async function runWhisperX(opts: {
 
     const args = [opts.wavPath, '--model', opts.modelPath];
     if (normalizedLanguage !== '' && normalizedLanguage !== 'auto') {
-        args.push('--language', opts.language);
+        args.push('--language', normalizedLanguage);
     }
     args.push(
         '--output_dir',

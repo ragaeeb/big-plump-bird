@@ -1,11 +1,16 @@
 import { readdir, rm, stat } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { loadConfig } from '../core/config';
-import { deleteVideoData, openDb } from '../core/db';
+import { deleteVideoFully, openDb } from '../core/db';
 import { getAnalytics } from './analytics-repository';
 import type { CreateJobRequest, JobOverrides } from './job-logic';
 import { JobManager } from './job-manager';
-import { getTranscriptDetail, listTranscriptions, resolveAudioSource } from './transcript-repository';
+import {
+    getTranscriptDetail,
+    listTranscriptChannels,
+    listTranscriptions,
+    resolveAudioSource,
+} from './transcript-repository';
 import {
     getVideoDeleteCandidate,
     getVideoRetryCandidate,
@@ -14,11 +19,18 @@ import {
 } from './video-repository';
 
 const API_PORT = parsePositiveInt(Bun.env.BPB_WEB_API_PORT, 8787);
+const API_HOST = Bun.env.BPB_WEB_API_HOST ?? '127.0.0.1';
 const JOB_CONCURRENCY = parsePositiveInt(Bun.env.BPB_WEB_JOB_CONCURRENCY, 1);
+const MAX_JSON_BODY_BYTES = 1_048_576;
+const VIDEO_ID_ENCODED_RE = /^[A-Za-z0-9_-]+$/;
+const ENHANCEMENT_MODES = new Set(['off', 'auto', 'on', 'analyze-only']);
+const SOURCE_CLASSES = new Set(['auto', 'studio', 'podium', 'far-field', 'cassette']);
+const DEREVERB_MODES = new Set(['off', 'auto', 'on']);
 const DEFAULT_CONFIG_PATH = resolve(import.meta.dir, '../../config.json');
 const CONFIG_PATH = resolve(Bun.env.BPB_CONFIG_PATH ?? DEFAULT_CONFIG_PATH);
 
 const initialConfig = await loadConfig(CONFIG_PATH);
+const cachedOptions = buildOptionsResponse(initialConfig);
 const db = await openDb(initialConfig.dbPath);
 const jobManager = new JobManager({
     concurrency: JOB_CONCURRENCY,
@@ -36,13 +48,15 @@ const server = Bun.serve({
             return withCors(response);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            return withCors(json({ error: message }, { status: 400 }));
+            console.error('[web-api] unhandled request error:', message);
+            return withCors(json({ error: 'Internal server error' }, { status: 500 }));
         }
     },
+    hostname: API_HOST,
     port: API_PORT,
 });
 
-console.log(`[web-api] listening on http://127.0.0.1:${server.port}`);
+console.log(`[web-api] listening on http://${API_HOST}:${server.port}`);
 console.log(`[web-api] config: ${CONFIG_PATH}`);
 console.log(`[web-api] db: ${initialConfig.dbPath}`);
 console.log(`[web-api] defaults: model=${initialConfig.modelPath}, language=${initialConfig.language}`);
@@ -90,13 +104,15 @@ async function handleApiRequest(request: Request, url: URL): Promise<Response> {
             return handleGetVideos(url);
         case 'GET /api/transcripts':
             return handleGetTranscripts(url);
+        case 'GET /api/channels':
+            return handleGetChannels();
         default:
             return json({ error: 'Not found' }, { status: 404 });
     }
 }
 
 function handleGetJobs(url: URL): Response {
-    const limit = parsePositiveInt(url.searchParams.get('limit'), 50);
+    const limit = parseNonNegativeInt(url.searchParams.get('limit'), 50);
     return json({ jobs: jobManager.listJobs(limit) });
 }
 
@@ -110,9 +126,14 @@ function handleGetJob(pathname: string): Response {
 }
 
 async function handlePostJob(request: Request): Promise<Response> {
-    const payload = (await readJson(request)) as CreateJobRequest;
-    const job = jobManager.createJob(payload);
-    return json({ job }, { status: 201 });
+    try {
+        const payload = validateCreateJobRequest((await readJson(request)) as CreateJobRequest);
+        const job = jobManager.createJob(payload);
+        return json({ job }, { status: 201 });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, { status: 400 });
+    }
 }
 
 function handleGetVideos(url: URL): Response {
@@ -124,6 +145,9 @@ function handleRetryVideo(pathname: string): Response {
     const prefix = '/api/videos/';
     const suffix = '/retry';
     const encodedVideoId = pathname.slice(prefix.length, -suffix.length);
+    if (!VIDEO_ID_ENCODED_RE.test(encodedVideoId)) {
+        return json({ error: 'invalid video_id' }, { status: 400 });
+    }
     const videoId = decodeURIComponent(encodedVideoId);
 
     if (videoId.length === 0) {
@@ -139,9 +163,7 @@ function handleRetryVideo(pathname: string): Response {
     }
 
     if (candidate.status === 'processing') {
-        const activeJob = jobManager
-            .listJobs(500)
-            .find((job) => (job.status === 'queued' || job.status === 'running') && job.input === candidate.sourceUri);
+        const activeJob = jobManager.findActiveJobByInput(candidate.sourceUri);
         if (activeJob) {
             return json({ error: `Video already has an active job: ${activeJob.id}` }, { status: 409 });
         }
@@ -163,9 +185,12 @@ function handleRetryVideo(pathname: string): Response {
 async function handleDeleteVideo(pathname: string): Promise<Response> {
     const prefix = '/api/videos/';
     const encodedVideoId = pathname.slice(prefix.length);
+    if (!VIDEO_ID_ENCODED_RE.test(encodedVideoId)) {
+        return json({ error: 'invalid video_id' }, { status: 400 });
+    }
     const videoId = decodeURIComponent(encodedVideoId);
 
-    if (videoId.length === 0 || videoId.includes('/')) {
+    if (videoId.length === 0) {
         return json({ error: 'video_id is required' }, { status: 400 });
     }
 
@@ -174,9 +199,7 @@ async function handleDeleteVideo(pathname: string): Promise<Response> {
         return json({ error: `Video not found: ${videoId}` }, { status: 404 });
     }
 
-    const activeJob = jobManager
-        .listJobs(500)
-        .find((job) => (job.status === 'queued' || job.status === 'running') && job.input === candidate.sourceUri);
+    const activeJob = jobManager.findActiveJobByInput(candidate.sourceUri);
     if (activeJob) {
         return json({ error: `Cannot delete while job is active: ${activeJob.id}` }, { status: 409 });
     }
@@ -186,8 +209,7 @@ async function handleDeleteVideo(pathname: string): Promise<Response> {
         await rm(cleanupPath, { force: true, recursive: true });
     }
 
-    deleteVideoData(db, videoId);
-    db.query('DELETE FROM videos WHERE video_id = ?;').run(videoId);
+    deleteVideoFully(db, videoId);
 
     return json({ deleted: true, videoId });
 }
@@ -211,9 +233,7 @@ function handleGetStats(): Response {
             )
             .get() as { count: number }
     ).count;
-    const activeJobs = jobManager
-        .listJobs(500)
-        .filter((job) => job.status === 'queued' || job.status === 'running').length;
+    const activeJobs = jobManager.countActiveJobs();
 
     return json({
         stats: {
@@ -227,7 +247,7 @@ function handleGetStats(): Response {
 
 function handleGetTranscripts(url: URL): Response {
     const limit = parsePositiveInt(url.searchParams.get('limit'), 50);
-    const offset = parsePositiveInt(url.searchParams.get('offset'), 0);
+    const offset = parseNonNegativeInt(url.searchParams.get('offset'), 0);
     const query = (url.searchParams.get('q') ?? '').trim();
     const channelId = (url.searchParams.get('channel_id') ?? '').trim();
     const transcripts = listTranscriptions(db, {
@@ -239,6 +259,10 @@ function handleGetTranscripts(url: URL): Response {
     return json({ transcripts });
 }
 
+function handleGetChannels(): Response {
+    return json({ channels: listTranscriptChannels(db) });
+}
+
 function handleGetAnalytics(): Response {
     const analytics = getAnalytics(db);
     return json({ analytics });
@@ -246,7 +270,7 @@ function handleGetAnalytics(): Response {
 
 async function handleGetTranscriptById(pathname: string): Promise<Response> {
     const videoId = decodeURIComponent(pathname.slice('/api/transcripts/'.length));
-    const transcript = getTranscriptDetail(db, videoId);
+    const transcript = await getTranscriptDetail(db, videoId);
     if (!transcript) {
         return json({ error: `Transcript not found for video_id: ${videoId}` }, { status: 404 });
     }
@@ -270,9 +294,12 @@ async function handleGetAudioByVideoId(request: Request, pathname: string): Prom
     return streamAudioResponse(request, source.path, source.mimeType);
 }
 
-async function handleGetOptions(): Promise<Response> {
-    const config = await loadConfig(CONFIG_PATH);
-    return json({
+function handleGetOptions(): Response {
+    return json(cachedOptions);
+}
+
+function buildOptionsResponse(config: Awaited<ReturnType<typeof loadConfig>>): Record<string, unknown> {
+    return {
         defaults: {
             attenLimDb: config.enhancement.attenLimDb,
             dereverbMode: config.enhancement.dereverbMode,
@@ -317,7 +344,7 @@ async function handleGetOptions(): Promise<Response> {
             { label: 'Far-field / audience', value: 'far-field' },
             { label: 'Cassette', value: 'cassette' },
         ],
-    });
+    };
 }
 
 function parsePositiveInt(value: string | null | undefined, fallback: number): number {
@@ -328,10 +355,33 @@ function parsePositiveInt(value: string | null | undefined, fallback: number): n
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseNonNegativeInt(value: string | null | undefined, fallback: number): number {
+    if (!value) {
+        return fallback;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 async function readJson(request: Request): Promise<unknown> {
+    const contentLengthRaw = request.headers.get('content-length');
+    if (contentLengthRaw) {
+        const contentLength = Number.parseInt(contentLengthRaw, 10);
+        if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+            throw new Error(`JSON payload too large (max ${MAX_JSON_BODY_BYTES} bytes).`);
+        }
+    }
+
     try {
-        return await request.json();
-    } catch {
+        const bodyText = await request.text();
+        if (new TextEncoder().encode(bodyText).byteLength > MAX_JSON_BODY_BYTES) {
+            throw new Error(`JSON payload too large (max ${MAX_JSON_BODY_BYTES} bytes).`);
+        }
+        return JSON.parse(bodyText) as unknown;
+    } catch (error) {
+        if (error instanceof Error && error.message.startsWith('JSON payload too large')) {
+            throw error;
+        }
         throw new Error('Invalid JSON payload.');
     }
 }
@@ -341,6 +391,67 @@ function withCors(response: Response): Response {
     response.headers.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,HEAD,OPTIONS');
     response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
     return response;
+}
+
+function validateCreateJobRequest(raw: CreateJobRequest): CreateJobRequest {
+    if (!raw || typeof raw !== 'object') {
+        throw new Error('Invalid job payload.');
+    }
+
+    const input = typeof raw.input === 'string' ? raw.input.trim() : '';
+    if (input.length === 0) {
+        throw new Error('input is required');
+    }
+
+    const overrides = raw.overrides;
+    if (overrides !== undefined) {
+        if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+            throw new Error('overrides must be an object');
+        }
+
+        if (overrides.language !== undefined && typeof overrides.language !== 'string') {
+            throw new Error('overrides.language must be a string');
+        }
+        if (overrides.modelPath !== undefined && typeof overrides.modelPath !== 'string') {
+            throw new Error('overrides.modelPath must be a string');
+        }
+        if (
+            overrides.outputFormats !== undefined &&
+            (!Array.isArray(overrides.outputFormats) ||
+                overrides.outputFormats.some((value) => typeof value !== 'string'))
+        ) {
+            throw new Error('overrides.outputFormats must be an array of strings');
+        }
+        if (overrides.enhancementMode !== undefined && !ENHANCEMENT_MODES.has(overrides.enhancementMode)) {
+            throw new Error('overrides.enhancementMode is invalid');
+        }
+        if (overrides.sourceClass !== undefined && !SOURCE_CLASSES.has(overrides.sourceClass)) {
+            throw new Error('overrides.sourceClass is invalid');
+        }
+        if (overrides.dereverbMode !== undefined && !DEREVERB_MODES.has(overrides.dereverbMode)) {
+            throw new Error('overrides.dereverbMode is invalid');
+        }
+        if (
+            overrides.attenLimDb !== undefined &&
+            (!Number.isFinite(overrides.attenLimDb) || overrides.attenLimDb < 0 || overrides.attenLimDb > 60)
+        ) {
+            throw new Error('overrides.attenLimDb must be between 0 and 60');
+        }
+        if (
+            overrides.snrSkipThresholdDb !== undefined &&
+            (!Number.isFinite(overrides.snrSkipThresholdDb) ||
+                overrides.snrSkipThresholdDb < -20 ||
+                overrides.snrSkipThresholdDb > 60)
+        ) {
+            throw new Error('overrides.snrSkipThresholdDb must be between -20 and 60');
+        }
+    }
+
+    return {
+        force: raw.force === true,
+        input,
+        overrides: raw.overrides,
+    };
 }
 
 function buildRetryOverrides(candidate: {
@@ -431,7 +542,7 @@ async function collectVideoCleanupPaths(videoId: string, candidate: VideoDeleteC
         }
         const resolved = resolve(inputPath);
         const rel = relative(dataDir, resolved);
-        if (rel === '' || rel.startsWith('..')) {
+        if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
             return;
         }
         cleanupPaths.add(resolved);

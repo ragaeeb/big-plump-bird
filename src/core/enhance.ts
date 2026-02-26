@@ -70,6 +70,8 @@ export type EnhancementResult = {
     finishedAt: string;
 };
 
+let enhancementAvailableCacheKey: string | null = null;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -112,6 +114,16 @@ function skippedResult(
 // ---------------------------------------------------------------------------
 
 export async function checkEnhancementAvailable(config: EnhancementConfig): Promise<void> {
+    const availabilityCacheKey = [
+        resolvePython(config),
+        resolveScript('analyze_audio.py'),
+        resolveScript('process_audio.py'),
+        config.mode === 'analyze-only' ? 'analyze-only' : resolveDeepFilter(config),
+    ].join('|');
+    if (enhancementAvailableCacheKey === availabilityCacheKey) {
+        return;
+    }
+
     const py = resolvePython(config);
     if (!(await pathExists(py))) {
         throw new Error(
@@ -134,10 +146,12 @@ export async function checkEnhancementAvailable(config: EnhancementConfig): Prom
         ].join(';'),
     ]);
     if (sanity.exitCode !== 0) {
+        const detail = sanity.stderr.trim() || sanity.stdout.trim();
         throw new Error(
             'Enhancement environment is not healthy. Reinstall with:\n' +
                 '  bun run setup-enhance\n' +
-                'If the issue persists, remove `tools/enhance/.venv` and run setup again.',
+                'If the issue persists, remove `tools/enhance/.venv` and run setup again.\n' +
+                (detail ? `Details: ${detail}` : ''),
         );
     }
 
@@ -150,11 +164,15 @@ export async function checkEnhancementAvailable(config: EnhancementConfig): Prom
         }
         const deepFilterVersion = await runCommand(deepFilter, ['--version']);
         if (deepFilterVersion.exitCode !== 0) {
+            const detail = deepFilterVersion.stderr.trim() || deepFilterVersion.stdout.trim();
             throw new Error(
-                `deep-filter is not executable at ${deepFilter}.\nReinstall with:\n  bun run setup-enhance`,
+                `deep-filter is not executable at ${deepFilter}.\nReinstall with:\n  bun run setup-enhance` +
+                    (detail ? `\nDetails: ${detail}` : ''),
             );
         }
     }
+
+    enhancementAvailableCacheKey = availabilityCacheKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +206,8 @@ export async function analyzeAudio(opts: {
     );
 
     if (result.exitCode !== 0) {
-        throw new Error(`analyze_audio.py failed (exit ${result.exitCode})`);
+        const detail = result.stderr.trim() || result.stdout.trim();
+        throw new Error(`analyze_audio.py failed (exit ${result.exitCode})${detail ? `: ${detail}` : ''}`);
     }
 
     return JSON.parse(await readFile(outputPath, 'utf-8')) as AudioAnalysis;
@@ -233,7 +252,8 @@ export async function processAudio(opts: {
     );
 
     if (result.exitCode !== 0) {
-        throw new Error(`process_audio.py failed (exit ${result.exitCode})`);
+        const detail = result.stderr.trim() || result.stdout.trim();
+        throw new Error(`process_audio.py failed (exit ${result.exitCode})${detail ? `: ${detail}` : ''}`);
     }
 
     return JSON.parse(await readFile(resultPath, 'utf-8')) as ProcessingResult;

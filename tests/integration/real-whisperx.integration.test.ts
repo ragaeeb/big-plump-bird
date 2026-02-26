@@ -9,6 +9,7 @@ const runReal = process.env.BPB_RUN_REAL_INTEGRATION === '1';
 const maybeRealTest = runReal ? test : test.skip;
 
 maybeRealTest('real whisperx smoke test runs on tiny fixture audio', async () => {
+    const previousWhisperxBin = process.env.WHISPERX_BIN;
     const whisperxBin = process.env.WHISPERX_BIN ?? resolve('.venv-whisperx/bin/whisperx');
     if (!(await pathExists(whisperxBin))) {
         throw new Error(`WhisperX binary not found at ${whisperxBin}. Run: bun run setup-whisperx`);
@@ -37,5 +38,10 @@ maybeRealTest('real whisperx smoke test runs on tiny fixture audio', async () =>
         expect(await pathExists(`${outputBase}.json`)).toBe(true);
     } finally {
         await rm(tempDir, { force: true, recursive: true });
+        if (previousWhisperxBin === undefined) {
+            delete process.env.WHISPERX_BIN;
+        } else {
+            process.env.WHISPERX_BIN = previousWhisperxBin;
+        }
     }
 });

@@ -168,11 +168,14 @@ export function getAnalytics(db: Database): AnalyticsPayload {
         )
         .get() as EnhancementSummaryRow) ?? { applied: 0, failed: 0, skipped: 0, total: 0 };
 
-    const enhancementOutcomes: AnalyticsDistribution[] = [
-        { count: enhancementSummary.applied ?? 0, key: 'applied' },
-        { count: enhancementSummary.skipped ?? 0, key: 'skipped' },
-        { count: enhancementSummary.failed ?? 0, key: 'failed' },
-    ].filter((item) => item.count > 0 || enhancementSummary.total === 0);
+    const enhancementOutcomes: AnalyticsDistribution[] =
+        enhancementSummary.total === 0
+            ? []
+            : [
+                  { count: enhancementSummary.applied ?? 0, key: 'applied' },
+                  { count: enhancementSummary.skipped ?? 0, key: 'skipped' },
+                  { count: enhancementSummary.failed ?? 0, key: 'failed' },
+              ].filter((item) => item.count > 0);
 
     const durationBuckets = buildDurationBuckets(
         readDistribution(

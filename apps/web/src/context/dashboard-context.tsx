@@ -49,6 +49,7 @@ function useDashboardData() {
         void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.jobs });
         void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.videos });
         void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.stats });
+        void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.health });
     };
 
     return {

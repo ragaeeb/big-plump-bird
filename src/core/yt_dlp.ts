@@ -219,21 +219,17 @@ function buildAudioFormatLadder(requestedFormat: string): [string, string, strin
     return [requested, lower96, lower64, higherAnyAbr];
 }
 
-let aria2cChecked = false;
-let aria2cAvailable = false;
+let aria2cCheckPromise: Promise<boolean> | null = null;
 
 async function canUseAria2c(): Promise<boolean> {
-    if (aria2cChecked) {
-        return aria2cAvailable;
-    }
-    aria2cChecked = true;
-    try {
-        const result = await runCommand('aria2c', ['--version']);
-        aria2cAvailable = result.exitCode === 0;
-    } catch {
-        aria2cAvailable = false;
-    }
-    return aria2cAvailable;
+    aria2cCheckPromise ??= runCommand('aria2c', ['--version'])
+        .then((result) => result.exitCode === 0)
+        .catch(() => false);
+    return aria2cCheckPromise;
+}
+
+export function resetAria2cCheck(): void {
+    aria2cCheckPromise = null;
 }
 
 function wasInterruptedByUser(output: string): boolean {

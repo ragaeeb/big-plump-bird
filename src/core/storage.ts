@@ -1,4 +1,5 @@
-import { cp, rm } from 'node:fs/promises';
+import { cp, mkdir, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { pathExists } from './utils';
 
 export interface StorageBackend {
@@ -9,6 +10,7 @@ export interface StorageBackend {
 
 export class LocalStorageBackend implements StorageBackend {
     async putFile(srcPath: string, destPath: string): Promise<void> {
+        await mkdir(dirname(destPath), { recursive: true });
         await cp(srcPath, destPath);
     }
 

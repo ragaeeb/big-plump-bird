@@ -1,3 +1,4 @@
+import { rename, rm } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import type { RunConfig } from './config';
 import { ensureDir, pathExists, runCommand } from './utils';
@@ -7,7 +8,7 @@ const DEFAULT_MODEL_URLS: Record<string, string> = {
 };
 
 function isLocalModelPath(modelPath: string): boolean {
-    return modelPath.includes('/') || modelPath.endsWith('.bin');
+    return modelPath.includes('/') || modelPath.includes('\\') || modelPath.endsWith('.bin');
 }
 
 function inferModelUrl(modelPath: string): string | null {
@@ -38,10 +39,13 @@ export async function ensureModelReady(config: RunConfig): Promise<RunConfig> {
 
     await ensureDir(dirname(resolvedModelPath));
     console.log(`Model not found. Downloading to ${resolvedModelPath} ...`);
-    const result = await runCommand('curl', ['-L', '-o', resolvedModelPath, modelUrl], { stream: true });
+    const tempPath = `${resolvedModelPath}.part`;
+    const result = await runCommand('curl', ['--fail', '-L', '-o', tempPath, modelUrl], { stream: true });
     if (result.exitCode !== 0) {
+        await rm(tempPath, { force: true });
         throw new Error(`Model download failed (curl exit ${result.exitCode}).`);
     }
+    await rename(tempPath, resolvedModelPath);
 
     if (!(await pathExists(resolvedModelPath))) {
         throw new Error(`Model download finished but file is missing: ${resolvedModelPath}`);

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { getTranscriptions } from '@/lib/api';
+import { getTranscriptChannels, getTranscriptions } from '@/lib/api';
 import { formatTranscriptPreview } from '@/lib/transcript-format';
 import { formatDate } from '@/lib/ui-utils';
 
@@ -37,29 +37,13 @@ export function TranscriptionsRoute() {
         refetchInterval: 10_000,
     });
     const channelsQuery = useQuery({
-        queryFn: () => getTranscriptions({ limit: 200 }),
+        queryFn: getTranscriptChannels,
         queryKey: QUERY_KEYS.channels,
         refetchInterval: 30_000,
         staleTime: 30_000,
     });
 
-    const channelOptions = useMemo(() => {
-        const unique = new Map<string, { channel: string | null; channelId: string | null }>();
-        for (const item of channelsQuery.data ?? []) {
-            if (!item.channelId) {
-                continue;
-            }
-            unique.set(item.channelId, {
-                channel: item.channel,
-                channelId: item.channelId,
-            });
-        }
-        return Array.from(unique.values()).sort((left, right) => {
-            const leftLabel = `${left.channel ?? ''} ${left.channelId ?? ''}`.toLowerCase();
-            const rightLabel = `${right.channel ?? ''} ${right.channelId ?? ''}`.toLowerCase();
-            return leftLabel.localeCompare(rightLabel);
-        });
-    }, [channelsQuery.data]);
+    const channelOptions = useMemo(() => channelsQuery.data ?? [], [channelsQuery.data]);
 
     const sortedTranscripts = useMemo(() => {
         const items = [...(transcriptsQuery.data ?? [])];
@@ -97,6 +81,13 @@ export function TranscriptionsRoute() {
             return '';
         }
         return sortDirection === 'asc' ? ' ↑' : ' ↓';
+    };
+
+    const ariaSortFor = (key: SortKey): 'ascending' | 'descending' | 'none' => {
+        if (sortKey !== key) {
+            return 'none';
+        }
+        return sortDirection === 'asc' ? 'ascending' : 'descending';
     };
 
     return (
@@ -154,7 +145,7 @@ export function TranscriptionsRoute() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>
+                                <TableHead aria-sort={ariaSortFor('title')}>
                                     <button
                                         className="cursor-pointer"
                                         onClick={() => toggleSort('title')}
@@ -163,7 +154,7 @@ export function TranscriptionsRoute() {
                                         Title{sortIndicator('title')}
                                     </button>
                                 </TableHead>
-                                <TableHead>
+                                <TableHead aria-sort={ariaSortFor('language')}>
                                     <button
                                         className="cursor-pointer"
                                         onClick={() => toggleSort('language')}
@@ -172,7 +163,7 @@ export function TranscriptionsRoute() {
                                         Lang{sortIndicator('language')}
                                     </button>
                                 </TableHead>
-                                <TableHead>
+                                <TableHead aria-sort={ariaSortFor('hasAudio')}>
                                     <button
                                         className="cursor-pointer"
                                         onClick={() => toggleSort('hasAudio')}
@@ -181,7 +172,7 @@ export function TranscriptionsRoute() {
                                         Audio{sortIndicator('hasAudio')}
                                     </button>
                                 </TableHead>
-                                <TableHead>
+                                <TableHead aria-sort={ariaSortFor('createdAt')}>
                                     <button
                                         className="cursor-pointer"
                                         onClick={() => toggleSort('createdAt')}

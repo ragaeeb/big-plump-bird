@@ -6,6 +6,7 @@ import { formatDate, statusClassName } from '@/lib/ui-utils';
 
 export function JobQueueRoute() {
     const { jobsQuery } = useDashboard();
+    const jobs = jobsQuery.data ?? [];
 
     return (
         <Card>
@@ -24,14 +25,28 @@ export function JobQueueRoute() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {(jobsQuery.data ?? []).length === 0 ? (
+                        {jobsQuery.isLoading ? (
+                            <TableRow>
+                                <TableCell className="text-muted-foreground" colSpan={4}>
+                                    Loading jobs...
+                                </TableCell>
+                            </TableRow>
+                        ) : jobsQuery.isError ? (
+                            <TableRow>
+                                <TableCell className="text-destructive" colSpan={4}>
+                                    {jobsQuery.error instanceof Error
+                                        ? jobsQuery.error.message
+                                        : 'Failed to load jobs.'}
+                                </TableCell>
+                            </TableRow>
+                        ) : jobs.length === 0 ? (
                             <TableRow>
                                 <TableCell className="text-muted-foreground" colSpan={4}>
                                     No jobs in queue.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            (jobsQuery.data ?? []).map((job) => (
+                            jobs.map((job) => (
                                 <TableRow key={job.id}>
                                     <TableCell>
                                         <Badge className={statusClassName(job.status)}>{job.status}</Badge>

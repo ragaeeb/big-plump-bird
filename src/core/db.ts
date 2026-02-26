@@ -2,6 +2,8 @@ import { Database } from 'bun:sqlite';
 import { dirname } from 'node:path';
 import { ensureDir } from './utils';
 
+const SCHEMA_VERSION = 2;
+
 export type VideoRecord = {
     video_id: string;
     source_type: 'url' | 'file';
@@ -251,9 +253,26 @@ export async function openDb(dbPath: string): Promise<Database> {
     db.exec('CREATE INDEX IF NOT EXISTS idx_enhancement_runs_video_id ON enhancement_runs(video_id);');
     db.exec('CREATE INDEX IF NOT EXISTS idx_enhancement_segments_run_id ON enhancement_segments(run_id);');
 
-    ensureVideoColumns(db);
+    applyMigrations(db);
 
     return db;
+}
+
+function applyMigrations(db: Database): void {
+    const versionRow = db.query('PRAGMA user_version;').get() as { user_version?: number } | null;
+    const currentVersion = Number.isFinite(versionRow?.user_version) ? Number(versionRow?.user_version) : 0;
+
+    if (currentVersion < 1) {
+        ensureVideoColumns(db);
+    }
+
+    if (currentVersion < 2) {
+        db.exec(`INSERT INTO segments_fts(segments_fts) VALUES('rebuild');`);
+    }
+
+    if (currentVersion !== SCHEMA_VERSION) {
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    }
 }
 
 function ensureVideoColumns(db: Database): void {
@@ -436,6 +455,11 @@ export function deleteVideoData(db: Database, videoId: string): void {
     tx(videoId);
 }
 
+export function deleteVideoFully(db: Database, videoId: string): void {
+    deleteVideoData(db, videoId);
+    db.query('DELETE FROM videos WHERE video_id = ?;').run(videoId);
+}
+
 export type SearchResult = {
     video_id: string;
     start_ms: number;
@@ -454,7 +478,12 @@ export function searchSegments(db: Database, query: string, limit: number): Sear
       LIMIT ?;
     `,
     );
-    return stmt.all(query, limit) as SearchResult[];
+    try {
+        return stmt.all(query, limit) as SearchResult[];
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Invalid search query for FTS MATCH: ${message}`);
+    }
 }
 
 export function insertEnhancementRun(db: Database, record: EnhancementRunRecord): number {

@@ -16,8 +16,69 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Release Please
+        id: release
         uses: googleapis/release-please-action@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      - name: Auto-merge release PR
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: actions/github-script@v7
+        env:
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+          RELEASE_PRS: ${{ steps.release.outputs.prs }}
+        with:
+          github-token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const parseJson = (raw, label) => {
+              try {
+                return JSON.parse(raw);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Failed to parse ${label}: ${message}`);
+                return null;
+              }
+            };
+
+            const prs = [];
+            if (process.env.RELEASE_PRS) {
+              const parsed = parseJson(process.env.RELEASE_PRS, 'RELEASE_PRS');
+              if (Array.isArray(parsed)) {
+                prs.push(...parsed);
+              }
+            }
+            if (prs.length === 0 && process.env.RELEASE_PR) {
+              const parsedSingle = parseJson(process.env.RELEASE_PR, 'RELEASE_PR');
+              if (parsedSingle && typeof parsedSingle === 'object') {
+                prs.push(parsedSingle);
+              }
+            }
+
+            if (prs.length === 0) {
+              core.info('No release PRs returned by release-please output.');
+              return;
+            }
+
+            for (const pr of prs) {
+              const prNumber = Number(pr.number);
+              if (!Number.isFinite(prNumber)) {
+                core.warning(`Skipping merge for malformed release PR payload: ${JSON.stringify(pr)}`);
+                continue;
+              }
+
+              core.info(`Merging release PR #${prNumber}`);
+              try {
+                await github.rest.pulls.merge({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                  merge_method: 'squash',
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Failed to merge release PR #${prNumber}: ${message}`);
+              }
+            }
