@@ -23,6 +23,7 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
       - name: Auto-merge release PR
+        id: auto_merge
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         uses: actions/github-script@v7
         env:
@@ -59,9 +60,11 @@ jobs:
 
             if (prs.length === 0) {
               core.info('No release PRs returned by release-please output.');
+              core.setOutput('merged_any', 'false');
               return;
             }
 
+            let mergedAny = false;
             for (const pr of prs) {
               const prNumber = Number(pr.number);
               if (!Number.isFinite(prNumber)) {
@@ -77,8 +80,18 @@ jobs:
                   pull_number: prNumber,
                   merge_method: 'squash',
                 });
+                mergedAny = true;
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 core.warning(`Failed to merge release PR #${prNumber}: ${message}`);
               }
             }
+            core.setOutput('merged_any', String(mergedAny));
+      - name: Publish GitHub release after auto-merge
+        if: ${{ steps.auto_merge.outputs.merged_any == 'true' }}
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-pull-request: true

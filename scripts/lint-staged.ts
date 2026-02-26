@@ -23,7 +23,29 @@ async function main(): Promise<void> {
         return;
     }
 
-    const check = Bun.spawn(['bunx', 'biome', 'check', ...files], { stderr: 'inherit', stdout: 'inherit' });
+    const BIOME_FILE_EXTENSIONS = new Set([
+        '.cjs',
+        '.css',
+        '.cts',
+        '.js',
+        '.json',
+        '.jsonc',
+        '.jsx',
+        '.mjs',
+        '.mts',
+        '.ts',
+        '.tsx',
+    ]);
+    const biomeFiles = files.filter((file) => {
+        const match = file.toLowerCase().match(/\.[^./\\]+$/);
+        return match ? BIOME_FILE_EXTENSIONS.has(match[0]) : false;
+    });
+    if (biomeFiles.length === 0) {
+        console.log('[lint:staged] No staged files supported by Biome. Skipping.');
+        return;
+    }
+
+    const check = Bun.spawn(['bunx', 'biome', 'check', ...biomeFiles], { stderr: 'inherit', stdout: 'inherit' });
     const exitCode = await check.exited;
     if (exitCode !== 0) {
         throw new Error(`biome check failed with exit code ${exitCode}`);
