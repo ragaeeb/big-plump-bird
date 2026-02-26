@@ -25,7 +25,12 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Run unit tests
-        run: bun test tests/unit --max-concurrency=1
+        run: bun test tests/unit --max-concurrency=1 --coverage --coverage-reporter=lcov
 
       - name: Run integration tests
         run: bun run test:integration
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
