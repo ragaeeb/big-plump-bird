@@ -20,7 +20,7 @@ const SIDEBAR_KEYBOARD_SHORTCUT = 'b';
 type SidebarContextProps = {
     state: 'expanded' | 'collapsed';
     open: boolean;
-    setOpen: (open: boolean) => React.Dispatch<React.SetStateAction<boolean>>;
+    setOpen: React.Dispatch<React.SetStateAction<boolean>>;
     toggleSidebar: () => void;
 };
 
