@@ -244,24 +244,37 @@ async function main() {
                 ? resolve(parsed.flags['enhance-plan-out'])
                 : undefined;
         const runConfig = dryRun ? config : await ensureModelReady(config);
+        const abortController = new AbortController();
         let interrupted = false;
         const handleSignal = (signal: NodeJS.Signals) => {
+            if (interrupted) {
+                console.error(`Received ${signal} again. Still shutting down...`);
+                return;
+            }
             interrupted = true;
-            console.error(`Received ${signal}. Waiting for active work to finish...`);
+            abortController.abort(signal);
+            console.error(`Received ${signal}. Cancelling remaining work...`);
         };
-        process.once('SIGINT', handleSignal);
-        process.once('SIGTERM', handleSignal);
+        process.on('SIGINT', handleSignal);
+        process.on('SIGTERM', handleSignal);
 
         try {
-            await runPipeline(runConfig, {
-                dryRun,
-                enhancePlanIn,
-                enhancePlanOut,
-                force,
-                paths,
-                urls,
-                urlsFile,
-            });
+            try {
+                await runPipeline(runConfig, {
+                    abortSignal: abortController.signal,
+                    dryRun,
+                    enhancePlanIn,
+                    enhancePlanOut,
+                    force,
+                    paths,
+                    urls,
+                    urlsFile,
+                });
+            } catch (error) {
+                if (!interrupted) {
+                    throw error;
+                }
+            }
         } finally {
             process.off('SIGINT', handleSignal);
             process.off('SIGTERM', handleSignal);

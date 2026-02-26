@@ -30,6 +30,7 @@ export type RunOptions = {
     dryRun: boolean;
     enhancePlanIn?: string;
     enhancePlanOut?: string;
+    abortSignal?: AbortSignal;
 };
 
 type InputItem = { source_type: 'file'; source_uri: string } | { source_type: 'url'; source_uri: string };
@@ -51,6 +52,10 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
     let hadFailures = false;
 
     try {
+        if (options.abortSignal?.aborted) {
+            return;
+        }
+
         if (!options.dryRun) {
             await ensureWhisperXAvailable();
         }
@@ -59,10 +64,20 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
             await checkEnhancementAvailable(config.enhancement);
         }
 
+        if (options.abortSignal?.aborted) {
+            return;
+        }
+
         const inputs: InputItem[] = [];
 
         const expandedPaths = await expandPaths(options.paths);
+        if (options.abortSignal?.aborted) {
+            return;
+        }
         for (const filePath of expandedPaths) {
+            if (options.abortSignal?.aborted) {
+                return;
+            }
             inputs.push({ source_type: 'file', source_uri: filePath });
         }
 
@@ -83,11 +98,17 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
         if (seedUrls.length > 0) {
             const seen = new Set<string>();
             for (const seedUrl of seedUrls) {
+                if (options.abortSignal?.aborted) {
+                    return;
+                }
                 const expandedUrls = await expandYtDlpUrls(seedUrl);
                 if (expandedUrls.length > 1) {
                     console.log(`[urls] Expanded ${seedUrl} -> ${expandedUrls.length} video URLs`);
                 }
                 for (const expandedUrl of expandedUrls) {
+                    if (options.abortSignal?.aborted) {
+                        return;
+                    }
                     if (seen.has(expandedUrl)) {
                         continue;
                     }
@@ -102,14 +123,23 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
         }
 
         const concurrency = Math.max(1, config.jobs);
-        await runWithConcurrency(inputs, concurrency, async (item) => {
-            const ok = await processInput(item, config, options, dirs, db);
-            if (!ok) {
-                hadFailures = true;
-            }
-        });
+        await runWithConcurrency(
+            inputs,
+            concurrency,
+            async (item) => {
+                const ok = await processInput(item, config, options, dirs, db);
+                if (!ok) {
+                    hadFailures = true;
+                }
+            },
+            options.abortSignal,
+        );
     } finally {
         db.close(false);
+    }
+
+    if (options.abortSignal?.aborted) {
+        return;
     }
 
     if (hadFailures) {
@@ -732,8 +762,13 @@ async function fileSize(path: string): Promise<number> {
     return info.size;
 }
 
-async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
-    if (items.length === 0) {
+async function runWithConcurrency<T>(
+    items: T[],
+    limit: number,
+    worker: (item: T) => Promise<void>,
+    abortSignal?: AbortSignal,
+): Promise<void> {
+    if (items.length === 0 || abortSignal?.aborted) {
         return;
     }
 
@@ -741,6 +776,9 @@ async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T
     const cap = Math.min(Math.max(1, limit), items.length);
     const workers = Array.from({ length: cap }, async () => {
         while (true) {
+            if (abortSignal?.aborted) {
+                return;
+            }
             const current = index++;
             if (current >= items.length) {
                 return;
