@@ -16,6 +16,8 @@ This uses **uv** to:
 2. Install dependencies from `tools/enhance/requirements.txt` (`silero-vad`, `nara-wpe`, `ruptures`, etc.)
 3. Download and install the `deep-filter` binary under `tools/enhance/bin/`
 
+`tools/enhance/bin/` contains runtime-only binaries and is ignored by git.
+
 `bun install` runs the same step as **postinstall** (best-effort: install still succeeds if uv or Python is missing).
 
 ## Requirements
@@ -32,4 +34,4 @@ The CLI and `config.json` point the pipeline at `tools/enhance/.venv/bin/python3
 - **analyze_audio.py** — Silero VAD, silence extraction, ruptures PELT regime detection, SNR estimation. Writes a JSON plan.
 - **process_audio.py** — Reads the plan; runs optional WPE dereverberation and `deep-filter` denoising per regime; writes enhanced WAV and result JSON.
 
-The TypeScript layer in `src/enhance.ts` invokes these via `Bun.spawn` and handles SNR gating, source-class overrides, and plan I/O.
+The TypeScript layer in `src/core/enhance.ts` invokes these via `Bun.spawn` and handles SNR gating, source-class overrides, and plan I/O.

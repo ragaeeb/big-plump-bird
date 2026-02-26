@@ -53,7 +53,7 @@
 - Optional pre-WhisperX enhancement stage: `--enhance auto|on|analyze-only`
 - Tools: Silero VAD (segmentation), ruptures (regime detection), `deep-filter` (denoising), NARA-WPE (dereverberation)
 - Python scripts in `tools/enhance/`, separate venv at `tools/enhance/.venv/`
-- Orchestrator: `src/enhance.ts` → calls `analyze_audio.py` then `process_audio.py`
+- Orchestrator: `src/core/enhance.ts` → calls `analyze_audio.py` then `process_audio.py`
 - SNR gate: skips enhancement for clean audio (configurable threshold, default 15 dB)
 - Regime-aware: detects noise floor changes mid-file and applies per-regime parameters
 - Human-in-the-loop: `--enhance-plan-out` saves analysis plans, `--enhance-plan-in` loads edited plans

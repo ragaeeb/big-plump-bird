@@ -83,6 +83,7 @@ This fails on any missing dependency so issues are caught early.
 - `setup-enhance` uses `uv` and defaults to Python `3.14` (`BPB_PYTHON_VERSION` to override)
 - `setup-whisperx` uses `uv` and defaults to Python `3.13` (`BPB_WHISPERX_PYTHON_VERSION` to override)
 - Real URL ingestion/transcription needs `ffmpeg` and `yt-dlp` installed system-wide
+- `deep-filter` is a runtime artifact downloaded by `setup-enhance` into `tools/enhance/bin/` and is intentionally not committed
 
 ## Setup Paths
 
