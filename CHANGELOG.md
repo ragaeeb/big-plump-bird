@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/ragaeeb/big-plump-bird/compare/v1.0.0...v1.0.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* **sigint:** Respect sigint ([d0561ac](https://github.com/ragaeeb/big-plump-bird/commit/d0561ac9bba16fe4a32cdf68a38d7bda0d6c8391))
+
 ## [1.0.0](https://github.com/ragaeeb/big-plump-bird/compare/v0.1.0...v1.0.0) (2026-02-26)
 
 
