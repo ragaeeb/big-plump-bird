@@ -1,5 +1,4 @@
 import type { Database } from 'bun:sqlite';
-import { existsSync } from 'node:fs';
 import { extname } from 'node:path';
 import { pathExists } from '../core/utils';
 
@@ -97,7 +96,28 @@ type TranscriptChannelRow = {
 
 const AUDIO_ARTIFACT_KINDS = ['source_audio', 'audio_wav_enhanced', 'audio_wav'];
 const AUDIO_SOURCE_CACHE_TTL_MS = 30_000;
+const MAX_AUDIO_SOURCE_CACHE_ENTRIES = 5_000;
 const audioSourceCache = new Map<string, { expiresAt: number; value: AudioSource | null }>();
+
+function pruneAudioSourceCache(now: number): void {
+    for (const [key, entry] of audioSourceCache) {
+        if (entry.expiresAt <= now) {
+            audioSourceCache.delete(key);
+        }
+    }
+    while (audioSourceCache.size > MAX_AUDIO_SOURCE_CACHE_ENTRIES) {
+        const oldestKey = audioSourceCache.keys().next().value;
+        if (oldestKey === undefined) {
+            break;
+        }
+        audioSourceCache.delete(oldestKey);
+    }
+}
+
+function setCachedAudioSource(videoId: string, value: AudioSource | null, now: number): void {
+    audioSourceCache.set(videoId, { expiresAt: now + AUDIO_SOURCE_CACHE_TTL_MS, value });
+    pruneAudioSourceCache(now);
+}
 
 export function listTranscriptions(
     db: Database,
@@ -209,7 +229,7 @@ export function listTranscriptChannels(db: Database): TranscriptChannel[] {
     }));
 }
 
-export function getTranscriptDetail(db: Database, videoId: string): TranscriptDetail | null {
+export async function getTranscriptDetail(db: Database, videoId: string): Promise<TranscriptDetail | null> {
     const row = db
         .query(
             `
@@ -238,7 +258,7 @@ export function getTranscriptDetail(db: Database, videoId: string): TranscriptDe
     }
 
     const words = parseCompactWords(row.json);
-    const audioKind = getAudioKind(db, videoId);
+    const audioKind = await getAudioKind(db, videoId);
     return {
         audioKind,
         createdAt: row.created_at,
@@ -258,6 +278,7 @@ export function getTranscriptDetail(db: Database, videoId: string): TranscriptDe
 
 export async function resolveAudioSource(db: Database, videoId: string): Promise<AudioSource | null> {
     const now = Date.now();
+    pruneAudioSourceCache(now);
     const cached = audioSourceCache.get(videoId);
     if (cached && cached.expiresAt > now) {
         return cached.value;
@@ -273,18 +294,18 @@ export async function resolveAudioSource(db: Database, videoId: string): Promise
             mimeType: guessMimeType(candidate.uri),
             path: candidate.uri,
         };
-        audioSourceCache.set(videoId, { expiresAt: now + AUDIO_SOURCE_CACHE_TTL_MS, value: source });
+        setCachedAudioSource(videoId, source, now);
         return source;
     }
 
-    audioSourceCache.set(videoId, { expiresAt: now + AUDIO_SOURCE_CACHE_TTL_MS, value: null });
+    setCachedAudioSource(videoId, null, now);
     return null;
 }
 
-function getAudioKind(db: Database, videoId: string): string | null {
+async function getAudioKind(db: Database, videoId: string): Promise<string | null> {
     const candidates = getAudioCandidates(db, videoId);
     for (const candidate of candidates) {
-        if (existsSync(candidate.uri)) {
+        if (await pathExists(candidate.uri)) {
             return candidate.kind;
         }
     }

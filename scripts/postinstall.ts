@@ -20,19 +20,26 @@ async function main(): Promise<void> {
 
     console.log('[postinstall] First install detected. Running setup flow...');
 
-    const hookExit = await run('bun', ['run', 'setup-git-hooks']);
-    if (hookExit !== 0) {
-        console.warn('[postinstall] setup-git-hooks failed. You can rerun manually with: bun run setup-git-hooks');
-    }
+    try {
+        const hookExit = await run('bun', ['run', 'setup-git-hooks']);
+        if (hookExit !== 0) {
+            console.warn('[postinstall] setup-git-hooks failed. You can rerun manually with: bun run setup-git-hooks');
+        }
 
-    const enhanceExit = await run('bun', ['run', 'setup-enhance']);
-    if (enhanceExit !== 0) {
-        console.warn('[postinstall] setup-enhance failed. You can rerun manually with: bun run setup-enhance');
+        const enhanceExit = await run('bun', ['run', 'setup-enhance']);
+        if (enhanceExit !== 0) {
+            console.warn('[postinstall] setup-enhance failed. You can rerun manually with: bun run setup-enhance');
+        }
+    } finally {
+        try {
+            await mkdir(dirname(SENTINEL_PATH), { recursive: true });
+            await writeFile(SENTINEL_PATH, `${new Date().toISOString()}\n`, 'utf-8');
+            console.log('[postinstall] Setup flow marked complete for this install tree.');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[postinstall] Failed to write sentinel: ${message}`);
+        }
     }
-
-    await mkdir(dirname(SENTINEL_PATH), { recursive: true });
-    await writeFile(SENTINEL_PATH, `${new Date().toISOString()}\n`, 'utf-8');
-    console.log('[postinstall] Setup flow marked complete for this install tree.');
 }
 
 main().catch((error) => {

@@ -57,17 +57,16 @@ function SidebarProvider({
             if (setOpenProp) {
                 const openState = typeof value === 'function' ? value(open) : value;
                 setOpenProp(openState);
-                document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
             } else {
-                _setOpen((currentOpen) => {
-                    const openState = typeof value === 'function' ? value(currentOpen) : value;
-                    document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
-                    return openState;
-                });
+                _setOpen((currentOpen) => (typeof value === 'function' ? value(currentOpen) : value));
             }
         },
         [setOpenProp, open],
     );
+
+    React.useEffect(() => {
+        document.cookie = `${SIDEBAR_COOKIE_NAME}=${open}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+    }, [open]);
 
     // Helper to toggle the sidebar.
     const toggleSidebar = React.useCallback(() => {
@@ -77,8 +76,10 @@ function SidebarProvider({
     // Adds a keyboard shortcut to toggle the sidebar.
     React.useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
-            const target = event.target as HTMLElement | null;
-            const isEditable = !!target?.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
+            const target = event.target;
+            const isEditable =
+                target instanceof HTMLElement &&
+                (target.isContentEditable || !!target.closest('input, textarea, [contenteditable], [role="textbox"]'));
             if (isEditable) {
                 return;
             }

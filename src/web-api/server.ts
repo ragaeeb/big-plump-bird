@@ -270,7 +270,7 @@ function handleGetAnalytics(): Response {
 
 async function handleGetTranscriptById(pathname: string): Promise<Response> {
     const videoId = decodeURIComponent(pathname.slice('/api/transcripts/'.length));
-    const transcript = getTranscriptDetail(db, videoId);
+    const transcript = await getTranscriptDetail(db, videoId);
     if (!transcript) {
         return json({ error: `Transcript not found for video_id: ${videoId}` }, { status: 404 });
     }

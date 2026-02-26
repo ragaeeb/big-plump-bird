@@ -259,7 +259,7 @@ async function processInput(
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`Error processing ${item.source_uri}: ${message}`);
-        const id = videoId ?? sha256String(item.source_uri);
+        const id = videoId ?? sha256String(item.source_uri).slice(0, 32);
         const now = new Date().toISOString();
         upsertVideo(db, {
             created_at: now,

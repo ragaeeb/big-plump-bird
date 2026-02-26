@@ -456,11 +456,8 @@ export function deleteVideoData(db: Database, videoId: string): void {
 }
 
 export function deleteVideoFully(db: Database, videoId: string): void {
-    const tx = db.transaction((id: string) => {
-        deleteVideoData(db, id);
-        db.query('DELETE FROM videos WHERE video_id = ?;').run(id);
-    });
-    tx(videoId);
+    deleteVideoData(db, videoId);
+    db.query('DELETE FROM videos WHERE video_id = ?;').run(videoId);
 }
 
 export type SearchResult = {

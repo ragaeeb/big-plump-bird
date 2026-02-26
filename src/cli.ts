@@ -201,7 +201,10 @@ async function main() {
         autoDownloadModel: toBoolean(parsed.flags['auto-download-model'], baseConfig.autoDownloadModel),
         downloadVideo: toBoolean(parsed.flags['download-video'], baseConfig.downloadVideo),
         enhancement,
-        jobs: toNumber(parsed.flags.jobs, baseConfig.jobs),
+        jobs: (() => {
+            const parsedJobs = toNumber(parsed.flags.jobs, baseConfig.jobs);
+            return Number.isFinite(parsedJobs) ? Math.max(1, Math.round(parsedJobs)) : Math.max(1, baseConfig.jobs);
+        })(),
         keepSourceAudio: toBoolean(parsed.flags['keep-source-audio'], baseConfig.keepSourceAudio),
         keepWav: toBoolean(parsed.flags['keep-wav'], baseConfig.keepWav),
         language: typeof parsed.flags.language === 'string' ? parsed.flags.language : baseConfig.language,

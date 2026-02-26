@@ -33,16 +33,28 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const parseJson = (raw, label) => {
+              try {
+                return JSON.parse(raw);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Failed to parse ${label}: ${message}`);
+                return null;
+              }
+            };
 
             const prs = [];
             if (process.env.RELEASE_PRS) {
-              const parsed = JSON.parse(process.env.RELEASE_PRS);
+              const parsed = parseJson(process.env.RELEASE_PRS, 'RELEASE_PRS');
               if (Array.isArray(parsed)) {
                 prs.push(...parsed);
               }
             }
             if (prs.length === 0 && process.env.RELEASE_PR) {
-              prs.push(JSON.parse(process.env.RELEASE_PR));
+              const parsedSingle = parseJson(process.env.RELEASE_PR, 'RELEASE_PR');
+              if (parsedSingle && typeof parsedSingle === 'object') {
+                prs.push(parsedSingle);
+              }
             }
 
             if (prs.length === 0) {
@@ -51,17 +63,22 @@ jobs:
             }
 
             for (const pr of prs) {
-              const prNumber = pr.number;
+              const prNumber = Number(pr.number);
               if (!Number.isFinite(prNumber)) {
                 core.warning(`Skipping merge for malformed release PR payload: ${JSON.stringify(pr)}`);
                 continue;
               }
 
               core.info(`Merging release PR #${prNumber}`);
-              await github.rest.pulls.merge({
-                owner,
-                repo,
-                pull_number: prNumber,
-                merge_method: 'squash',
-              });
+              try {
+                await github.rest.pulls.merge({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                  merge_method: 'squash',
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Failed to merge release PR #${prNumber}: ${message}`);
+              }
             }

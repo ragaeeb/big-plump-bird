@@ -127,13 +127,13 @@ function resolveFromConfigDir(value: string, configDir: string): string {
 }
 
 function validateConfig(config: RunConfig): RunConfig {
-    if (config.dbPath.trim().length === 0) {
+    if (typeof config.dbPath !== 'string' || config.dbPath.trim().length === 0) {
         throw new Error('Invalid config: dbPath is required.');
     }
-    if (config.dataDir.trim().length === 0) {
+    if (typeof config.dataDir !== 'string' || config.dataDir.trim().length === 0) {
         throw new Error('Invalid config: dataDir is required.');
     }
-    if (config.modelPath.trim().length === 0) {
+    if (typeof config.modelPath !== 'string' || config.modelPath.trim().length === 0) {
         throw new Error('Invalid config: modelPath is required.');
     }
     if (!WHISPERX_COMPUTE_TYPES.has(config.whisperxComputeType)) {

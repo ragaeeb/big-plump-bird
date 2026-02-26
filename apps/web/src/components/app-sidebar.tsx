@@ -76,7 +76,7 @@ export function AppSidebar({ onRefresh, onViewChange, queuedCount, transcriptCou
                     <SidebarMenuItem>
                         <SidebarMenuButton asChild className="data-[slot=sidebar-menu-button]:!p-1.5">
                             <div>
-                                <img alt="Big Plump Bird" className="size-5 rounded-sm" src="/vite.svg" />
+                                <img alt="" aria-hidden="true" className="size-5 rounded-sm" src="/vite.svg" />
                                 <span className="brand-primary-text text-base font-semibold">Big Plump Bird</span>
                             </div>
                         </SidebarMenuButton>
