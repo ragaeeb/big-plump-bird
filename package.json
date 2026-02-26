@@ -45,7 +45,7 @@
         "lint": "biome check .",
         "lint:fix": "biome check --write .",
         "lint:staged": "bun scripts/lint-staged.ts",
-        "postinstall": "bun run setup-git-hooks || true; bun run setup-enhance || true",
+        "postinstall": "bun scripts/postinstall.ts",
         "setup": "bun scripts/setup.ts",
         "setup-enhance": "bun scripts/setup-enhance.ts",
         "setup-git-hooks": "bun scripts/setup-git-hooks.ts",

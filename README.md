@@ -64,6 +64,12 @@ bun run setup:doctor
 bun run setup
 ```
 
+`bun install` behavior:
+
+- On first install for a fresh `node_modules`, `postinstall` runs setup helpers (`setup-git-hooks`, `setup-enhance`) once.
+- On later installs/updates in the same install tree (for example `bun update --latest`), setup is skipped automatically.
+- To rerun setup explicitly at any time: `bun run setup` (or `bun run setup:full` for strict mode).
+
 `bun run setup` behavior:
 
 - Required: installs web dependencies (`apps/web`)
@@ -94,6 +100,12 @@ bun install
 bun run setup:doctor
 bun run setup
 bun run dev:web
+```
+
+Dependency updates without rerunning setup:
+
+```bash
+bun update --latest
 ```
 
 Full pipeline (CLI + web + enhancement + WhisperX):
