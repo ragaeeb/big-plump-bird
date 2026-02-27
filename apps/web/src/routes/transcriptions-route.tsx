@@ -60,7 +60,6 @@ export function TranscriptionsRoute() {
                     return left.language.localeCompare(right.language) * direction;
                 case 'hasAudio':
                     return (Number(left.hasAudio) - Number(right.hasAudio)) * direction;
-                case 'createdAt':
                 default:
                     return left.createdAt.localeCompare(right.createdAt) * direction;
             }
@@ -163,6 +162,7 @@ export function TranscriptionsRoute() {
                                         Lang{sortIndicator('language')}
                                     </button>
                                 </TableHead>
+                                <TableHead>Engine</TableHead>
                                 <TableHead aria-sort={ariaSortFor('hasAudio')}>
                                     <button
                                         className="cursor-pointer"
@@ -186,13 +186,13 @@ export function TranscriptionsRoute() {
                         <TableBody>
                             {transcriptsQuery.isLoading ? (
                                 <TableRow>
-                                    <TableCell colSpan={4}>
+                                    <TableCell colSpan={5}>
                                         <Skeleton className="h-7 w-full" />
                                     </TableCell>
                                 </TableRow>
                             ) : sortedTranscripts.length === 0 ? (
                                 <TableRow>
-                                    <TableCell className="text-muted-foreground" colSpan={4}>
+                                    <TableCell className="text-muted-foreground" colSpan={5}>
                                         No transcriptions match this query.
                                     </TableCell>
                                 </TableRow>
@@ -215,6 +215,13 @@ export function TranscriptionsRoute() {
                                         <TableCell>
                                             <Link className="block w-full" to={`/transcriptions/${item.videoId}`}>
                                                 {item.language}
+                                            </Link>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Link className="block w-full" to={`/transcriptions/${item.videoId}`}>
+                                                {item.engineVersion
+                                                    ? `${item.engine} ${item.engineVersion}`
+                                                    : item.engine}
                                             </Link>
                                         </TableCell>
                                         <TableCell>

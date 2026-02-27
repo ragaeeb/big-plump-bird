@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { dirname } from 'node:path';
 import { ensureDir } from './utils';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export type VideoRecord = {
     video_id: string;
@@ -21,6 +21,8 @@ export type VideoRecord = {
     metadata_json?: string | null;
     local_path?: string | null;
     run_language?: string | null;
+    run_engine?: string | null;
+    run_engine_version?: string | null;
     run_model_path?: string | null;
     run_output_formats_json?: string | null;
     run_enhancement_json?: string | null;
@@ -119,6 +121,8 @@ export async function openDb(dbPath: string): Promise<Database> {
       metadata_json TEXT,
       local_path TEXT,
       run_language TEXT,
+      run_engine TEXT,
+      run_engine_version TEXT,
       run_model_path TEXT,
       run_output_formats_json TEXT,
       run_enhancement_json TEXT,
@@ -269,6 +273,9 @@ function applyMigrations(db: Database): void {
     if (currentVersion < 2) {
         db.exec(`INSERT INTO segments_fts(segments_fts) VALUES('rebuild');`);
     }
+    if (currentVersion < 3) {
+        ensureVideoColumns(db);
+    }
 
     if (currentVersion !== SCHEMA_VERSION) {
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
@@ -290,6 +297,8 @@ function ensureVideoColumns(db: Database): void {
         { name: 'timestamp', type: 'INTEGER' },
         { name: 'metadata_json', type: 'TEXT' },
         { name: 'run_language', type: 'TEXT' },
+        { name: 'run_engine', type: 'TEXT' },
+        { name: 'run_engine_version', type: 'TEXT' },
         { name: 'run_model_path', type: 'TEXT' },
         { name: 'run_output_formats_json', type: 'TEXT' },
         { name: 'run_enhancement_json', type: 'TEXT' },
@@ -306,15 +315,13 @@ export function hasTranscript(db: Database, videoId: string): boolean {
     return Boolean(row);
 }
 
-export function upsertVideo(db: Database, record: VideoRecord): void {
-    db.query(
-        `
+const UPSERT_VIDEO_SQL = `
       INSERT INTO videos (
         video_id, source_type, source_uri, title, description, webpage_url, uploader, uploader_id,
         channel, channel_id, duration_ms, upload_date, timestamp, metadata_json,
-        local_path, run_language, run_model_path, run_output_formats_json, run_enhancement_json,
-        status, error, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        local_path, run_language, run_engine, run_engine_version, run_model_path,
+        run_output_formats_json, run_enhancement_json, status, error, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(video_id) DO UPDATE SET
         source_type=excluded.source_type,
         source_uri=excluded.source_uri,
@@ -331,38 +338,80 @@ export function upsertVideo(db: Database, record: VideoRecord): void {
         metadata_json=excluded.metadata_json,
         local_path=excluded.local_path,
         run_language=excluded.run_language,
+        run_engine=excluded.run_engine,
+        run_engine_version=excluded.run_engine_version,
         run_model_path=excluded.run_model_path,
         run_output_formats_json=excluded.run_output_formats_json,
         run_enhancement_json=excluded.run_enhancement_json,
         status=excluded.status,
         error=excluded.error,
         updated_at=excluded.updated_at;
-    `,
-    ).run(
+    `;
+
+export function upsertVideo(db: Database, record: VideoRecord): void {
+    db.query(UPSERT_VIDEO_SQL).run(...toVideoUpsertValues(record));
+}
+
+function toNullable<T>(value: T | null | undefined): T | null {
+    return value ?? null;
+}
+
+function toVideoUpsertValues(
+    record: VideoRecord,
+): [
+    string,
+    'url' | 'file',
+    string,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    number | null,
+    string | null,
+    number | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string,
+    string | null,
+    string,
+    string,
+] {
+    return [
         record.video_id,
         record.source_type,
         record.source_uri,
-        record.title ?? null,
-        record.description ?? null,
-        record.webpage_url ?? null,
-        record.uploader ?? null,
-        record.uploader_id ?? null,
-        record.channel ?? null,
-        record.channel_id ?? null,
-        record.duration_ms ?? null,
-        record.upload_date ?? null,
-        record.timestamp ?? null,
-        record.metadata_json ?? null,
-        record.local_path ?? null,
-        record.run_language ?? null,
-        record.run_model_path ?? null,
-        record.run_output_formats_json ?? null,
-        record.run_enhancement_json ?? null,
+        toNullable(record.title),
+        toNullable(record.description),
+        toNullable(record.webpage_url),
+        toNullable(record.uploader),
+        toNullable(record.uploader_id),
+        toNullable(record.channel),
+        toNullable(record.channel_id),
+        toNullable(record.duration_ms),
+        toNullable(record.upload_date),
+        toNullable(record.timestamp),
+        toNullable(record.metadata_json),
+        toNullable(record.local_path),
+        toNullable(record.run_language),
+        toNullable(record.run_engine),
+        toNullable(record.run_engine_version),
+        toNullable(record.run_model_path),
+        toNullable(record.run_output_formats_json),
+        toNullable(record.run_enhancement_json),
         record.status,
-        record.error ?? null,
+        toNullable(record.error),
         record.created_at,
         record.updated_at,
-    );
+    ];
 }
 
 export function updateVideoStatus(db: Database, videoId: string, status: string, error?: string | null): void {

@@ -1,4 +1,4 @@
-export type AppView = 'new-job' | 'job-queue' | 'recent-videos' | 'transcriptions' | 'analytics';
+export type AppView = 'new-job' | 'job-queue' | 'recent-videos' | 'transcriptions' | 'analytics' | 'settings';
 
 export const VIEW_META: Record<AppView, { title: string; subtitle: string }> = {
     analytics: {
@@ -16,6 +16,10 @@ export const VIEW_META: Record<AppView, { title: string; subtitle: string }> = {
     'recent-videos': {
         subtitle: 'Browse the latest ingested and processed media.',
         title: 'Recent Videos',
+    },
+    settings: {
+        subtitle: 'Manage local dashboard settings and transcription credentials.',
+        title: 'Settings',
     },
     transcriptions: {
         subtitle: 'Inspect transcripts and jump to timestamped words.',

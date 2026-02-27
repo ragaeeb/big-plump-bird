@@ -2,6 +2,8 @@ export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 export type JobKind = 'url' | 'path';
 
 export type JobOverrides = {
+    engine?: 'whisperx' | 'tafrigh';
+    witAiApiKeys?: string[];
     language?: string;
     modelPath?: string;
     outputFormats?: string[];
@@ -63,6 +65,9 @@ export type TranscriptListItem = {
     updatedAt: string;
     durationMs: number | null;
     hasAudio: boolean;
+    engine: string;
+    engineVersion: string | null;
+    model: string;
 };
 
 export type TranscriptChannel = {
@@ -85,6 +90,9 @@ export type TranscriptDetail = {
     hasAudio: boolean;
     audioKind: string | null;
     audioUrl: string | null;
+    engine: string;
+    engineVersion: string | null;
+    model: string;
 };
 
 export type DashboardStats = {
@@ -158,6 +166,7 @@ export type OptionValue = {
 
 export type ApiOptions = {
     defaults: {
+        engine: 'whisperx' | 'tafrigh';
         language: string;
         modelPath: string;
         outputFormats: string[];
@@ -167,6 +176,7 @@ export type ApiOptions = {
         attenLimDb: number;
         snrSkipThresholdDb: number;
     };
+    engines: OptionValue[];
     languages: OptionValue[];
     models: OptionValue[];
     enhancementModes: OptionValue[];
@@ -223,6 +233,14 @@ export async function createJob(payload: CreateJobRequest): Promise<Transcriptio
 
 export async function retryVideo(videoId: string): Promise<TranscriptionJob> {
     const response = await request<{ job: TranscriptionJob }>(`/api/videos/${encodeURIComponent(videoId)}/retry`, {
+        method: 'POST',
+    });
+    return response.job;
+}
+
+export async function retryVideoWithOverrides(videoId: string, overrides?: JobOverrides): Promise<TranscriptionJob> {
+    const response = await request<{ job: TranscriptionJob }>(`/api/videos/${encodeURIComponent(videoId)}/retry`, {
+        body: overrides ? JSON.stringify({ overrides }) : undefined,
         method: 'POST',
     });
     return response.job;

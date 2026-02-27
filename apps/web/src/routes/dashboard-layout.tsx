@@ -14,6 +14,7 @@ const VIEW_PATHS: Record<AppView, string> = {
     'job-queue': '/job-queue',
     'new-job': '/new-job',
     'recent-videos': '/recent-videos',
+    settings: '/settings',
     transcriptions: '/transcriptions',
 };
 
@@ -29,6 +30,9 @@ function toView(pathname: string): AppView {
     }
     if (pathname.startsWith('/transcriptions')) {
         return 'transcriptions';
+    }
+    if (pathname.startsWith('/settings')) {
+        return 'settings';
     }
     return 'new-job';
 }

@@ -126,12 +126,16 @@ export function ChartAreaInteractive({ data }: { data: AnalyticsPoint[] }) {
                                 cursor={false}
                                 content={
                                     <ChartTooltipContent
-                                        labelFormatter={(value) =>
-                                            new Date(value).toLocaleDateString('en-US', {
+                                        labelFormatter={(value) => {
+                                            const dateValue =
+                                                typeof value === 'string' || typeof value === 'number'
+                                                    ? value
+                                                    : Date.now();
+                                            return new Date(dateValue).toLocaleDateString('en-US', {
                                                 day: 'numeric',
                                                 month: 'short',
-                                            })
-                                        }
+                                            });
+                                        }}
                                         indicator="dot"
                                     />
                                 }

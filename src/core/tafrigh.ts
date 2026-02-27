@@ -48,49 +48,75 @@ export async function runTafrigh(
     const words: TafrighTranscriptResult['words'] = [];
 
     for (const seg of rawSegments) {
-        const startMs = Math.round(seg.start * 1000);
-        const endMs = Math.round(seg.end * 1000);
-        const text = seg.text.trim();
-
-        if (text.length === 0) {
+        const normalized = normalizeSegment(seg);
+        if (!normalized) {
             continue;
         }
 
         segments.push({
-            end_ms: endMs,
-            start_ms: startMs,
-            text,
+            end_ms: normalized.endMs,
+            start_ms: normalized.startMs,
+            text: normalized.text,
             video_id: videoId,
         });
 
-        // Extract word-level tokens when available
-        if (Array.isArray(seg.tokens) && seg.tokens.length > 0) {
-            for (const token of seg.tokens) {
-                const tokenText = token.text.trim();
-                if (tokenText.length === 0) {
-                    continue;
-                }
-                const tokenStartMs = Math.round(token.start * 1000);
-                const tokenEndMs = Math.round(token.end * 1000);
-                if (!Number.isFinite(tokenStartMs) || !Number.isFinite(tokenEndMs) || tokenEndMs < tokenStartMs) {
-                    continue;
-                }
-                words.push({
-                    end_ms: tokenEndMs,
-                    start_ms: tokenStartMs,
-                    word: tokenText,
-                });
-            }
-        } else {
-            // No token-level data: fall back to treating the whole segment text as one word entry
-            // so the compact transcript JSON still captures timing for the segment
-            words.push({
-                end_ms: endMs,
-                start_ms: startMs,
-                word: text,
-            });
-        }
+        pushSegmentWords(seg, normalized, words);
     }
 
     return { language, segments, words };
+}
+
+function normalizeSegment(seg: Segment): { startMs: number; endMs: number; text: string } | null {
+    const startMs = Math.round(seg.start * 1000);
+    const endMs = Math.round(seg.end * 1000);
+    const text = seg.text.trim();
+    if (text.length === 0) {
+        return null;
+    }
+    return { endMs, startMs, text };
+}
+
+function pushSegmentWords(
+    seg: Segment,
+    normalized: { startMs: number; endMs: number; text: string },
+    words: TafrighTranscriptResult['words'],
+): void {
+    if (!Array.isArray(seg.tokens) || seg.tokens.length === 0) {
+        words.push({
+            end_ms: normalized.endMs,
+            start_ms: normalized.startMs,
+            word: normalized.text,
+        });
+        return;
+    }
+
+    for (const token of seg.tokens) {
+        const tokenWord = toTokenWord(token);
+        if (tokenWord) {
+            words.push(tokenWord);
+        }
+    }
+}
+
+function toTokenWord(token: {
+    text: string;
+    start: number;
+    end: number;
+}): TafrighTranscriptResult['words'][number] | null {
+    const tokenText = token.text.trim();
+    if (tokenText.length === 0) {
+        return null;
+    }
+
+    const tokenStartMs = Math.round(token.start * 1000);
+    const tokenEndMs = Math.round(token.end * 1000);
+    if (!Number.isFinite(tokenStartMs) || !Number.isFinite(tokenEndMs) || tokenEndMs < tokenStartMs) {
+        return null;
+    }
+
+    return {
+        end_ms: tokenEndMs,
+        start_ms: tokenStartMs,
+        word: tokenText,
+    };
 }

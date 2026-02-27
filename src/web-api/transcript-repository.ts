@@ -17,6 +17,9 @@ export type TranscriptListItem = {
     updatedAt: string;
     durationMs: number | null;
     hasAudio: boolean;
+    engine: string;
+    engineVersion: string | null;
+    model: string;
 };
 
 export type TranscriptWord = {
@@ -50,6 +53,9 @@ export type TranscriptDetail = {
     durationMs: number | null;
     hasAudio: boolean;
     audioKind: string | null;
+    engine: string;
+    engineVersion: string | null;
+    model: string;
 };
 
 type TranscriptListRow = {
@@ -59,6 +65,7 @@ type TranscriptListRow = {
     channel: string | null;
     channel_id: string | null;
     language: string;
+    run_language: string | null;
     text_preview: string;
     source_type: 'url' | 'file';
     source_uri: string;
@@ -68,12 +75,16 @@ type TranscriptListRow = {
     duration_ms: number | null;
     has_artifact_audio: 0 | 1;
     local_path: string | null;
+    model: string;
+    run_engine: string | null;
+    run_engine_version: string | null;
 };
 
 type TranscriptDetailRow = {
     video_id: string;
     title: string | null;
     language: string;
+    run_language: string | null;
     text: string;
     json: string;
     source_type: 'url' | 'file';
@@ -82,6 +93,9 @@ type TranscriptDetailRow = {
     created_at: string;
     updated_at: string;
     duration_ms: number | null;
+    model: string;
+    run_engine: string | null;
+    run_engine_version: string | null;
 };
 
 type AudioRow = {
@@ -166,6 +180,7 @@ export function listTranscriptions(
                 v.channel,
                 v.channel_id,
                 t.language,
+                v.run_language,
                 SUBSTR(t.text, 1, 220) AS text_preview,
                 v.source_type,
                 v.source_uri,
@@ -173,6 +188,9 @@ export function listTranscriptions(
                 t.created_at,
                 v.updated_at,
                 v.duration_ms,
+                t.model,
+                v.run_engine,
+                v.run_engine_version,
                 EXISTS (
                     SELECT 1
                     FROM artifacts a
@@ -195,8 +213,11 @@ export function listTranscriptions(
         createdAt: row.created_at,
         description: row.description,
         durationMs: row.duration_ms,
+        engine: coerceEngine(row.run_engine, row.model),
+        engineVersion: coerceEngineVersion(row.run_engine, row.run_engine_version, row.model),
         hasAudio: row.has_artifact_audio === 1 || Boolean(row.local_path),
-        language: row.language,
+        language: coerceDisplayLanguage(row.language, row.run_language),
+        model: row.model,
         sourceType: row.source_type,
         sourceUri: row.source_uri,
         status: row.status,
@@ -237,6 +258,7 @@ export async function getTranscriptDetail(db: Database, videoId: string): Promis
                 t.video_id,
                 v.title,
                 t.language,
+                v.run_language,
                 t.text,
                 t.json,
                 v.source_type,
@@ -244,7 +266,10 @@ export async function getTranscriptDetail(db: Database, videoId: string): Promis
                 v.status,
                 t.created_at,
                 v.updated_at,
-                v.duration_ms
+                v.duration_ms,
+                t.model,
+                v.run_engine,
+                v.run_engine_version
             FROM transcripts t
             JOIN videos v ON v.video_id = t.video_id
             WHERE t.video_id = ?
@@ -263,8 +288,11 @@ export async function getTranscriptDetail(db: Database, videoId: string): Promis
         audioKind,
         createdAt: row.created_at,
         durationMs: row.duration_ms,
+        engine: coerceEngine(row.run_engine, row.model),
+        engineVersion: coerceEngineVersion(row.run_engine, row.run_engine_version, row.model),
         hasAudio: audioKind !== null,
-        language: row.language,
+        language: coerceDisplayLanguage(row.language, row.run_language),
+        model: row.model,
         sourceType: row.source_type,
         sourceUri: row.source_uri,
         status: row.status,
@@ -274,6 +302,36 @@ export async function getTranscriptDetail(db: Database, videoId: string): Promis
         videoId: row.video_id,
         words,
     };
+}
+
+function coerceEngine(runEngine: string | null, model: string): string {
+    const normalized = runEngine?.trim().toLowerCase();
+    if (normalized === 'whisperx' || normalized === 'tafrigh') {
+        return normalized;
+    }
+    return model.toLowerCase().startsWith('tafrigh') ? 'tafrigh' : 'whisperx';
+}
+
+function coerceEngineVersion(runEngine: string | null, runEngineVersion: string | null, model: string): string | null {
+    if (runEngineVersion && runEngineVersion.trim().length > 0) {
+        return runEngineVersion.trim();
+    }
+    const engine = coerceEngine(runEngine, model);
+    if (engine === 'tafrigh') {
+        const match = model.match(/\bv(\d+(?:\.\d+)*)\b/i);
+        if (match) {
+            return `v${match[1]}`;
+        }
+    }
+    return null;
+}
+
+function coerceDisplayLanguage(transcriptLanguage: string, runLanguage: string | null): string {
+    const normalizedRunLanguage = runLanguage?.trim().toLowerCase();
+    if (normalizedRunLanguage && normalizedRunLanguage !== 'auto') {
+        return normalizedRunLanguage;
+    }
+    return transcriptLanguage;
 }
 
 export async function resolveAudioSource(db: Database, videoId: string): Promise<AudioSource | null> {

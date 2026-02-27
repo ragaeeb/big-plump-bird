@@ -54,6 +54,16 @@ type ParsedArgs = {
     positionals: string[];
 };
 
+type RunFlagContext = {
+    dryRun: boolean;
+    enhancePlanIn?: string;
+    enhancePlanOut?: string;
+    force: boolean;
+    paths: string[];
+    urls?: string[];
+    urlsFile?: string;
+};
+
 const NUMERIC_FLAGS = new Set([
     'enhance-atten-lim-db',
     'enhance-snr-threshold',
@@ -73,45 +83,20 @@ function parseArgs(args: string[]): ParsedArgs {
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (!command && !arg.startsWith('-')) {
+        if (shouldCaptureCommand(command, arg)) {
             command = arg;
             continue;
         }
 
-        if (arg === '-h' || arg === '--help') {
+        if (isHelpFlag(arg)) {
             flags.help = true;
             continue;
         }
 
         if (arg.startsWith('--')) {
-            const eqIdx = arg.indexOf('=');
-            const key = eqIdx === -1 ? arg.slice(2) : arg.slice(2, eqIdx);
-            const inlineValue = eqIdx === -1 ? undefined : arg.slice(eqIdx + 1);
-            let value: string | boolean | undefined = inlineValue;
-
-            if (value === undefined && i + 1 < args.length) {
-                const nextArg = args[i + 1];
-                const canUseNext = !nextArg.startsWith('-') || (NUMERIC_FLAGS.has(key) && isNumericLiteral(nextArg));
-                if (canUseNext) {
-                    value = nextArg;
-                    i += 1;
-                }
-            }
-
-            if (value === undefined) {
-                value = true;
-            }
-
-            const existing = flags[key];
-            if (existing !== undefined) {
-                if (Array.isArray(existing)) {
-                    existing.push(String(value));
-                } else {
-                    flags[key] = [String(existing), String(value)];
-                }
-            } else {
-                flags[key] = value;
-            }
+            const parsed = parseLongFlag(args, i);
+            appendFlagValue(flags, parsed.key, parsed.value);
+            i = parsed.nextIndex;
             continue;
         }
 
@@ -119,6 +104,60 @@ function parseArgs(args: string[]): ParsedArgs {
     }
 
     return { command, flags, positionals };
+}
+
+function shouldCaptureCommand(currentCommand: string | null, arg: string): boolean {
+    return !currentCommand && !arg.startsWith('-');
+}
+
+function isHelpFlag(arg: string): boolean {
+    return arg === '-h' || arg === '--help';
+}
+
+function parseLongFlag(args: string[], index: number): { key: string; nextIndex: number; value: string | boolean } {
+    const arg = args[index];
+    const eqIdx = arg.indexOf('=');
+    const key = eqIdx === -1 ? arg.slice(2) : arg.slice(2, eqIdx);
+    let value: string | boolean | undefined = eqIdx === -1 ? undefined : arg.slice(eqIdx + 1);
+    let nextIndex = index;
+
+    if (value === undefined && index + 1 < args.length) {
+        const nextArg = args[index + 1];
+        if (canConsumeAsFlagValue(key, nextArg)) {
+            value = nextArg;
+            nextIndex += 1;
+        }
+    }
+
+    return {
+        key,
+        nextIndex,
+        value: value ?? true,
+    };
+}
+
+function canConsumeAsFlagValue(key: string, candidate: string): boolean {
+    if (!candidate.startsWith('-')) {
+        return true;
+    }
+    return NUMERIC_FLAGS.has(key) && isNumericLiteral(candidate);
+}
+
+function appendFlagValue(
+    flags: Record<string, string | string[] | boolean>,
+    key: string,
+    value: string | boolean,
+): void {
+    const existing = flags[key];
+    if (existing === undefined) {
+        flags[key] = value;
+        return;
+    }
+    if (Array.isArray(existing)) {
+        existing.push(String(value));
+        return;
+    }
+    flags[key] = [String(existing), String(value)];
 }
 
 function toArray(value: string | string[] | boolean | undefined, splitComma = false): string[] {
@@ -172,170 +211,189 @@ async function main() {
 
     const configPath = String(parsed.flags.config ?? resolve('config.json'));
     const baseConfig = await loadConfig(configPath);
+    const config = resolveRunConfig(baseConfig, parsed.flags);
 
+    switch (parsed.command) {
+        case 'run':
+            await handleRunCommand(parsed.flags, config);
+            return;
+        case 'search':
+            await handleSearchCommand(parsed.positionals, parsed.flags, config.dbPath);
+            return;
+        default:
+            console.error(`Unknown command: ${parsed.command}\n`);
+            console.error(HELP);
+            process.exitCode = 1;
+    }
+}
+
+function resolveRunConfig(baseConfig: Awaited<ReturnType<typeof loadConfig>>, flags: ParsedArgs['flags']) {
+    const engine = typeof flags.engine === 'string' ? (flags.engine as typeof baseConfig.engine) : baseConfig.engine;
     const enhanceBase = baseConfig.enhancement;
     const enhancement = {
         ...enhanceBase,
-        attenLimDb: toNumber(parsed.flags['enhance-atten-lim-db'], enhanceBase.attenLimDb),
+        attenLimDb: toNumber(flags['enhance-atten-lim-db'], enhanceBase.attenLimDb),
         deepFilterBin:
-            typeof parsed.flags['enhance-deep-filter-bin'] === 'string'
-                ? parsed.flags['enhance-deep-filter-bin']
+            typeof flags['enhance-deep-filter-bin'] === 'string'
+                ? flags['enhance-deep-filter-bin']
                 : enhanceBase.deepFilterBin,
         dereverbMode:
-            typeof parsed.flags['enhance-dereverb'] === 'string'
-                ? (parsed.flags['enhance-dereverb'] as typeof enhanceBase.dereverbMode)
+            typeof flags['enhance-dereverb'] === 'string'
+                ? (flags['enhance-dereverb'] as typeof enhanceBase.dereverbMode)
                 : enhanceBase.dereverbMode,
         failPolicy:
-            typeof parsed.flags['enhance-fail-policy'] === 'string'
-                ? (parsed.flags['enhance-fail-policy'] as typeof enhanceBase.failPolicy)
+            typeof flags['enhance-fail-policy'] === 'string'
+                ? (flags['enhance-fail-policy'] as typeof enhanceBase.failPolicy)
                 : enhanceBase.failPolicy,
-        keepIntermediate: toBoolean(parsed.flags['enhance-keep-intermediate'], enhanceBase.keepIntermediate),
-        mode:
-            typeof parsed.flags.enhance === 'string'
-                ? (parsed.flags.enhance as typeof enhanceBase.mode)
-                : enhanceBase.mode,
-        snrSkipThresholdDb: toNumber(parsed.flags['enhance-snr-threshold'], enhanceBase.snrSkipThresholdDb),
+        keepIntermediate: toBoolean(flags['enhance-keep-intermediate'], enhanceBase.keepIntermediate),
+        mode: typeof flags.enhance === 'string' ? (flags.enhance as typeof enhanceBase.mode) : enhanceBase.mode,
+        snrSkipThresholdDb: toNumber(flags['enhance-snr-threshold'], enhanceBase.snrSkipThresholdDb),
         sourceClass:
-            typeof parsed.flags['source-class'] === 'string'
-                ? (parsed.flags['source-class'] as typeof enhanceBase.sourceClass)
+            typeof flags['source-class'] === 'string'
+                ? (flags['source-class'] as typeof enhanceBase.sourceClass)
                 : enhanceBase.sourceClass,
     };
 
-    // Resolve wit.ai API keys: CLI flag > env var > config file
-    const witAiApiKeys = (() => {
-        const fromFlag = toArray(parsed.flags['wit-ai-api-keys'], true)
-            .map((k) => k.trim())
-            .filter(Boolean);
-        if (fromFlag.length > 0) {
-            return fromFlag;
-        }
-        const fromEnv = (process.env.WIT_AI_API_KEYS ?? '').trim();
-        if (fromEnv.length > 0) {
-            return fromEnv.split(/\s+/).filter(Boolean);
-        }
-        return baseConfig.witAiApiKeys;
-    })();
-
-    const engine =
-        typeof parsed.flags.engine === 'string' ? (parsed.flags.engine as typeof baseConfig.engine) : baseConfig.engine;
-
-    const config = {
+    return {
         ...baseConfig,
-        autoDownloadModel: toBoolean(parsed.flags['auto-download-model'], baseConfig.autoDownloadModel),
-        downloadVideo: toBoolean(parsed.flags['download-video'], baseConfig.downloadVideo),
+        autoDownloadModel: toBoolean(flags['auto-download-model'], baseConfig.autoDownloadModel),
+        downloadVideo: toBoolean(flags['download-video'], baseConfig.downloadVideo),
         engine,
         enhancement,
-        jobs: (() => {
-            const parsedJobs = toNumber(parsed.flags.jobs, baseConfig.jobs);
-            return Number.isFinite(parsedJobs) ? Math.max(1, Math.round(parsedJobs)) : Math.max(1, baseConfig.jobs);
-        })(),
-        keepSourceAudio: toBoolean(parsed.flags['keep-source-audio'], baseConfig.keepSourceAudio),
-        keepWav: toBoolean(parsed.flags['keep-wav'], baseConfig.keepWav),
-        language: typeof parsed.flags.language === 'string' ? parsed.flags.language : baseConfig.language,
+        jobs: resolveJobs(flags.jobs, baseConfig.jobs),
+        keepSourceAudio: toBoolean(flags['keep-source-audio'], baseConfig.keepSourceAudio),
+        keepWav: toBoolean(flags['keep-wav'], baseConfig.keepWav),
+        language: typeof flags.language === 'string' ? flags.language : baseConfig.language,
         modelDownloadUrl:
-            typeof parsed.flags['model-download-url'] === 'string'
-                ? parsed.flags['model-download-url']
-                : baseConfig.modelDownloadUrl,
-        modelPath: typeof parsed.flags.model === 'string' ? parsed.flags.model : baseConfig.modelPath,
-        outputFormats: (() => {
-            const provided = toArray(parsed.flags['output-formats'], true);
-            if (provided.length === 0) {
-                return baseConfig.outputFormats;
-            }
-            return provided.map((f) => f.trim()).filter(Boolean);
-        })(),
-        whisperxBatchSize: Math.max(1, toNumber(parsed.flags['whisperx-batch-size'], baseConfig.whisperxBatchSize)),
+            typeof flags['model-download-url'] === 'string' ? flags['model-download-url'] : baseConfig.modelDownloadUrl,
+        modelPath: typeof flags.model === 'string' ? flags.model : baseConfig.modelPath,
+        outputFormats: resolveOutputFormats(flags['output-formats'], baseConfig.outputFormats),
+        whisperxBatchSize: Math.max(1, toNumber(flags['whisperx-batch-size'], baseConfig.whisperxBatchSize)),
         whisperxComputeType:
-            typeof parsed.flags['whisperx-compute-type'] === 'string'
-                ? (parsed.flags['whisperx-compute-type'] as typeof baseConfig.whisperxComputeType)
+            typeof flags['whisperx-compute-type'] === 'string'
+                ? (flags['whisperx-compute-type'] as typeof baseConfig.whisperxComputeType)
                 : baseConfig.whisperxComputeType,
-        witAiApiKeys,
+        witAiApiKeys: resolveWitAiApiKeys(flags['wit-ai-api-keys'], baseConfig.witAiApiKeys),
     };
+}
 
-    if (parsed.command === 'run') {
-        const paths = toArray(parsed.flags.paths)
-            .map((p) => resolve(p.trim()))
-            .filter(Boolean);
-        const urlsFile = typeof parsed.flags.urls === 'string' ? resolve(parsed.flags.urls) : undefined;
-        const urls = toArray(parsed.flags.url)
-            .map((u) => u.trim())
-            .filter(Boolean);
-        const force = toBoolean(parsed.flags.force, false);
-        const dryRun = toBoolean(parsed.flags['dry-run'], false);
-        const enhancePlanIn =
-            typeof parsed.flags['enhance-plan-in'] === 'string' ? resolve(parsed.flags['enhance-plan-in']) : undefined;
-        const enhancePlanOut =
-            typeof parsed.flags['enhance-plan-out'] === 'string'
-                ? resolve(parsed.flags['enhance-plan-out'])
-                : undefined;
-        const runConfig = dryRun ? config : await ensureModelReady(config);
-        const abortController = new AbortController();
-        let interrupted = false;
-        const handleSignal = (signal: NodeJS.Signals) => {
-            if (interrupted) {
-                console.error(`Received ${signal} again. Still shutting down...`);
-                return;
-            }
-            interrupted = true;
-            abortController.abort(signal);
-            console.error(`Received ${signal}. Cancelling remaining work...`);
-        };
-        process.on('SIGINT', handleSignal);
-        process.on('SIGTERM', handleSignal);
-
-        try {
-            try {
-                await runPipeline(runConfig, {
-                    abortSignal: abortController.signal,
-                    dryRun,
-                    enhancePlanIn,
-                    enhancePlanOut,
-                    force,
-                    paths,
-                    urls,
-                    urlsFile,
-                });
-            } catch (error) {
-                if (!interrupted) {
-                    throw error;
-                }
-            }
-        } finally {
-            process.off('SIGINT', handleSignal);
-            process.off('SIGTERM', handleSignal);
-        }
-
-        if (interrupted) {
-            process.exitCode = 130;
-        }
-        return;
+function resolveWitAiApiKeys(flagValue: string | string[] | boolean | undefined, fallback: string[]): string[] {
+    const fromFlag = toArray(flagValue, true)
+        .map((key) => key.trim())
+        .filter(Boolean);
+    if (fromFlag.length > 0) {
+        return fromFlag;
     }
+    const fromEnv = (process.env.WIT_AI_API_KEYS ?? '').trim();
+    if (fromEnv.length > 0) {
+        return fromEnv.split(/\\s+/).filter(Boolean);
+    }
+    return fallback;
+}
 
-    if (parsed.command === 'search') {
-        const query = parsed.positionals.join(' ');
-        if (!query) {
-            console.log('Provide a search query.\n');
-            console.log(HELP);
+function resolveOutputFormats(value: string | string[] | boolean | undefined, fallback: string[]): string[] {
+    const provided = toArray(value, true)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    if (provided.length > 0) {
+        return provided;
+    }
+    return fallback;
+}
+
+function resolveJobs(value: string | string[] | boolean | undefined, fallback: number): number {
+    const parsedJobs = toNumber(value, fallback);
+    if (Number.isFinite(parsedJobs)) {
+        return Math.max(1, Math.round(parsedJobs));
+    }
+    return Math.max(1, fallback);
+}
+
+function resolveRunFlags(flags: ParsedArgs['flags']): RunFlagContext {
+    return {
+        dryRun: toBoolean(flags['dry-run'], false),
+        enhancePlanIn: typeof flags['enhance-plan-in'] === 'string' ? resolve(flags['enhance-plan-in']) : undefined,
+        enhancePlanOut: typeof flags['enhance-plan-out'] === 'string' ? resolve(flags['enhance-plan-out']) : undefined,
+        force: toBoolean(flags.force, false),
+        paths: toArray(flags.paths)
+            .map((path) => resolve(path.trim()))
+            .filter(Boolean),
+        urls: toArray(flags.url)
+            .map((url) => url.trim())
+            .filter(Boolean),
+        urlsFile: typeof flags.urls === 'string' ? resolve(flags.urls) : undefined,
+    };
+}
+
+async function handleRunCommand(
+    flags: ParsedArgs['flags'],
+    config: Awaited<ReturnType<typeof loadConfig>>,
+): Promise<void> {
+    const runFlags = resolveRunFlags(flags);
+    const runConfig = runFlags.dryRun ? config : await ensureModelReady(config);
+    const abortController = new AbortController();
+    let interrupted = false;
+
+    const handleSignal = (signal: NodeJS.Signals) => {
+        if (interrupted) {
+            console.error(`Received ${signal} again. Still shutting down...`);
             return;
         }
-        const limit = toNumber(parsed.flags.limit, 10);
-        const db = await openDb(config.dbPath);
+        interrupted = true;
+        abortController.abort(signal);
+        console.error(`Received ${signal}. Cancelling remaining work...`);
+    };
+
+    process.on('SIGINT', handleSignal);
+    process.on('SIGTERM', handleSignal);
+
+    try {
         try {
-            const results = searchSegments(db, query, limit);
-            for (const row of results) {
-                const start = formatTimestamp(row.start_ms);
-                const end = formatTimestamp(row.end_ms);
-                console.log(`${row.video_id} [${start} - ${end}] ${row.text}`);
+            await runPipeline(runConfig, {
+                abortSignal: abortController.signal,
+                dryRun: runFlags.dryRun,
+                enhancePlanIn: runFlags.enhancePlanIn,
+                enhancePlanOut: runFlags.enhancePlanOut,
+                force: runFlags.force,
+                paths: runFlags.paths,
+                urls: runFlags.urls,
+                urlsFile: runFlags.urlsFile,
+            });
+        } catch (error) {
+            if (!interrupted) {
+                throw error;
             }
-        } finally {
-            db.close(false);
         }
+    } finally {
+        process.off('SIGINT', handleSignal);
+        process.off('SIGTERM', handleSignal);
+    }
+
+    if (interrupted) {
+        process.exitCode = 130;
+    }
+}
+
+async function handleSearchCommand(positionals: string[], flags: ParsedArgs['flags'], dbPath: string): Promise<void> {
+    const query = positionals.join(' ');
+    if (!query) {
+        console.log('Provide a search query.\\n');
+        console.log(HELP);
         return;
     }
 
-    console.error(`Unknown command: ${parsed.command}\n`);
-    console.error(HELP);
-    process.exitCode = 1;
+    const limit = toNumber(flags.limit, 10);
+    const db = await openDb(dbPath);
+    try {
+        const results = searchSegments(db, query, limit);
+        for (const row of results) {
+            const start = formatTimestamp(row.start_ms);
+            const end = formatTimestamp(row.end_ms);
+            console.log(`${row.video_id} [${start} - ${end}] ${row.text}`);
+        }
+    } finally {
+        db.close(false);
+    }
 }
 
 main().catch((error) => {

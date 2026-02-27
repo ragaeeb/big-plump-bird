@@ -134,75 +134,19 @@ function resolveFromConfigDir(value: string, configDir: string): string {
 }
 
 function validateConfig(config: RunConfig): RunConfig {
-    if (typeof config.dbPath !== 'string' || config.dbPath.trim().length === 0) {
-        throw new Error('Invalid config: dbPath is required.');
-    }
-    if (typeof config.dataDir !== 'string' || config.dataDir.trim().length === 0) {
-        throw new Error('Invalid config: dataDir is required.');
-    }
-    if (!TRANSCRIPTION_ENGINES.has(config.engine)) {
-        throw new Error(`Invalid config: engine must be one of ${Array.from(TRANSCRIPTION_ENGINES).join(', ')}.`);
-    }
+    assertRequiredString(config.dbPath, 'dbPath');
+    assertRequiredString(config.dataDir, 'dataDir');
+    assertInSet(config.engine, TRANSCRIPTION_ENGINES, 'engine');
+    assertWitAiApiKeys(config.witAiApiKeys);
+    assertRequiredString(config.modelPath, 'modelPath');
+    assertInSet(config.whisperxComputeType, WHISPERX_COMPUTE_TYPES, 'whisperxComputeType');
+    assertFiniteAtLeast(config.jobs, 1, 'jobs');
+    assertFiniteAtLeast(config.whisperxBatchSize, 1, 'whisperxBatchSize');
+    assertNonEmptyArray(config.outputFormats, 'outputFormats');
+    assertEnhancementConfig(config.enhancement);
+
     if (config.engine === 'tafrigh' && config.witAiApiKeys.length === 0) {
         throw new Error('Invalid config: witAiApiKeys must be a non-empty array when engine is "tafrigh".');
-    }
-    if (!Array.isArray(config.witAiApiKeys) || config.witAiApiKeys.some((k) => typeof k !== 'string')) {
-        throw new Error('Invalid config: witAiApiKeys must be an array of strings.');
-    }
-    if (typeof config.modelPath !== 'string' || config.modelPath.trim().length === 0) {
-        throw new Error('Invalid config: modelPath is required.');
-    }
-    if (!WHISPERX_COMPUTE_TYPES.has(config.whisperxComputeType)) {
-        throw new Error(
-            `Invalid config: whisperxComputeType must be one of ${Array.from(WHISPERX_COMPUTE_TYPES).join(', ')}.`,
-        );
-    }
-    if (!Number.isFinite(config.jobs) || config.jobs < 1) {
-        throw new Error('Invalid config: jobs must be a number >= 1.');
-    }
-    if (!Number.isFinite(config.whisperxBatchSize) || config.whisperxBatchSize < 1) {
-        throw new Error('Invalid config: whisperxBatchSize must be a number >= 1.');
-    }
-    if (!Array.isArray(config.outputFormats) || config.outputFormats.length === 0) {
-        throw new Error('Invalid config: outputFormats must be a non-empty array.');
-    }
-
-    if (!ENHANCEMENT_MODES.has(config.enhancement.mode)) {
-        throw new Error(`Invalid config: enhancement.mode must be one of ${Array.from(ENHANCEMENT_MODES).join(', ')}.`);
-    }
-    if (!SOURCE_CLASSES.has(config.enhancement.sourceClass)) {
-        throw new Error(
-            `Invalid config: enhancement.sourceClass must be one of ${Array.from(SOURCE_CLASSES).join(', ')}.`,
-        );
-    }
-    if (!DEREVERB_MODES.has(config.enhancement.dereverbMode)) {
-        throw new Error(
-            `Invalid config: enhancement.dereverbMode must be one of ${Array.from(DEREVERB_MODES).join(', ')}.`,
-        );
-    }
-    if (!FAIL_POLICIES.has(config.enhancement.failPolicy)) {
-        throw new Error(
-            `Invalid config: enhancement.failPolicy must be one of ${Array.from(FAIL_POLICIES).join(', ')}.`,
-        );
-    }
-    if (!Number.isFinite(config.enhancement.attenLimDb)) {
-        throw new Error('Invalid config: enhancement.attenLimDb must be finite.');
-    }
-    if (!Number.isFinite(config.enhancement.snrSkipThresholdDb)) {
-        throw new Error('Invalid config: enhancement.snrSkipThresholdDb must be finite.');
-    }
-    if (
-        !Number.isFinite(config.enhancement.vadThreshold) ||
-        config.enhancement.vadThreshold < 0 ||
-        config.enhancement.vadThreshold > 1
-    ) {
-        throw new Error('Invalid config: enhancement.vadThreshold must be between 0 and 1.');
-    }
-    if (!Number.isFinite(config.enhancement.minSilenceMs) || config.enhancement.minSilenceMs < 0) {
-        throw new Error('Invalid config: enhancement.minSilenceMs must be >= 0.');
-    }
-    if (!Number.isFinite(config.enhancement.maxRegimes) || config.enhancement.maxRegimes < 1) {
-        throw new Error('Invalid config: enhancement.maxRegimes must be >= 1.');
     }
 
     return {
@@ -210,4 +154,64 @@ function validateConfig(config: RunConfig): RunConfig {
         jobs: Math.max(1, Math.round(config.jobs)),
         whisperxBatchSize: Math.max(1, Math.round(config.whisperxBatchSize)),
     };
+}
+
+function assertRequiredString(value: unknown, field: string): void {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+        throw new Error(`Invalid config: ${field} is required.`);
+    }
+}
+
+function assertInSet(value: string, allowed: Set<string>, field: string): void {
+    if (allowed.has(value)) {
+        return;
+    }
+    throw new Error(`Invalid config: ${field} must be one of ${Array.from(allowed).join(', ')}.`);
+}
+
+function assertFiniteAtLeast(value: number, minimum: number, field: string): void {
+    if (Number.isFinite(value) && value >= minimum) {
+        return;
+    }
+    throw new Error(`Invalid config: ${field} must be a number >= ${minimum}.`);
+}
+
+function assertFiniteNumber(value: number, field: string): void {
+    if (Number.isFinite(value)) {
+        return;
+    }
+    throw new Error(`Invalid config: ${field} must be finite.`);
+}
+
+function assertFiniteBetween(value: number, min: number, max: number, field: string): void {
+    if (Number.isFinite(value) && value >= min && value <= max) {
+        return;
+    }
+    throw new Error(`Invalid config: ${field} must be between ${min} and ${max}.`);
+}
+
+function assertWitAiApiKeys(value: unknown): asserts value is string[] {
+    if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+        return;
+    }
+    throw new Error('Invalid config: witAiApiKeys must be an array of strings.');
+}
+
+function assertNonEmptyArray(value: unknown, field: string): void {
+    if (Array.isArray(value) && value.length > 0) {
+        return;
+    }
+    throw new Error(`Invalid config: ${field} must be a non-empty array.`);
+}
+
+function assertEnhancementConfig(config: EnhancementConfig): void {
+    assertInSet(config.mode, ENHANCEMENT_MODES, 'enhancement.mode');
+    assertInSet(config.sourceClass, SOURCE_CLASSES, 'enhancement.sourceClass');
+    assertInSet(config.dereverbMode, DEREVERB_MODES, 'enhancement.dereverbMode');
+    assertInSet(config.failPolicy, FAIL_POLICIES, 'enhancement.failPolicy');
+    assertFiniteNumber(config.attenLimDb, 'enhancement.attenLimDb');
+    assertFiniteNumber(config.snrSkipThresholdDb, 'enhancement.snrSkipThresholdDb');
+    assertFiniteBetween(config.vadThreshold, 0, 1, 'enhancement.vadThreshold');
+    assertFiniteAtLeast(config.minSilenceMs, 0, 'enhancement.minSilenceMs');
+    assertFiniteAtLeast(config.maxRegimes, 1, 'enhancement.maxRegimes');
 }

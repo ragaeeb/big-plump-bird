@@ -18,9 +18,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { useDashboard } from '@/context/dashboard-context';
 import { type CreateJobRequest, createJob } from '@/lib/api';
 import { FALLBACK_OPTIONS } from '@/lib/fallback-options';
+import { parseWitAiApiKeysInput, readWitAiApiKeysInput } from '@/lib/settings';
 
 type FormState = {
     input: string;
+    engine: 'whisperx' | 'tafrigh';
     language: string;
     modelPath: string;
     enhancementMode: 'off' | 'auto' | 'on' | 'analyze-only';
@@ -34,6 +36,7 @@ export function NewJobRoute() {
     const options = optionsQuery.data ?? FALLBACK_OPTIONS;
     const [submitError, setSubmitError] = useState<string | null>(null);
     const [form, setForm] = useState<FormState>({
+        engine: options.defaults.engine,
         enhancementMode: options.defaults.enhancementMode,
         force: false,
         input: '',
@@ -79,15 +82,22 @@ export function NewJobRoute() {
             setSubmitError('At least one output format is required.');
             return;
         }
+        const witAiApiKeys = parseWitAiApiKeysInput(readWitAiApiKeysInput());
+        if (form.engine === 'tafrigh' && witAiApiKeys.length === 0) {
+            setSubmitError('Tafrigh requires Wit.ai API keys. Add them in Settings.');
+            return;
+        }
 
         const payloads: CreateJobRequest[] = inputs.map((input) => ({
             force: form.force,
             input,
             overrides: {
+                engine: form.engine,
                 enhancementMode: form.enhancementMode,
                 language: form.language,
                 modelPath: form.modelPath,
                 outputFormats: form.outputFormats,
+                witAiApiKeys,
             },
         }));
         createJobMutation.mutate(payloads);
@@ -114,7 +124,30 @@ export function NewJobRoute() {
                         />
                         <p className="text-muted-foreground text-xs">Paste one URL/path per line.</p>
                     </div>
-                    <div className="grid gap-4 md:grid-cols-3">
+                    <div className="grid gap-4 md:grid-cols-4">
+                        <div className="grid gap-2">
+                            <Label>Engine</Label>
+                            <Select
+                                value={form.engine}
+                                onValueChange={(value) =>
+                                    setForm((previous) => ({
+                                        ...previous,
+                                        engine: value as FormState['engine'],
+                                    }))
+                                }
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {options.engines.map((option) => (
+                                        <SelectItem key={option.value} value={option.value}>
+                                            {option.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
                         <div className="grid gap-2">
                             <Label>Language</Label>
                             <Select
@@ -133,24 +166,35 @@ export function NewJobRoute() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div className="grid gap-2">
-                            <Label>Whisper model</Label>
-                            <Select
-                                value={form.modelPath}
-                                onValueChange={(value) => setForm((previous) => ({ ...previous, modelPath: value }))}
-                            >
-                                <SelectTrigger className="w-full">
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {options.models.map((option) => (
-                                        <SelectItem key={option.value} value={option.value}>
-                                            {option.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        {form.engine === 'whisperx' ? (
+                            <div className="grid gap-2">
+                                <Label>Whisper model</Label>
+                                <Select
+                                    value={form.modelPath}
+                                    onValueChange={(value) =>
+                                        setForm((previous) => ({ ...previous, modelPath: value }))
+                                    }
+                                >
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {options.models.map((option) => (
+                                            <SelectItem key={option.value} value={option.value}>
+                                                {option.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        ) : (
+                            <div className="grid gap-2">
+                                <Label>Model</Label>
+                                <div className="text-muted-foreground rounded-md border px-3 py-2 text-sm">
+                                    Tafrigh manages model selection internally.
+                                </div>
+                            </div>
+                        )}
                         <div className="grid gap-2">
                             <Label>Enhancement mode</Label>
                             <Select
