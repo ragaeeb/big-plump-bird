@@ -173,7 +173,7 @@ function assertFiniteAtLeast(value: number, minimum: number, field: string): voi
     if (Number.isFinite(value) && value >= minimum) {
         return;
     }
-    throw new Error(`Invalid config: ${field} must be a number >= ${minimum}.`);
+    throw new Error(`Invalid config: ${field} must be >= ${minimum}.`);
 }
 
 function assertFiniteNumber(value: number, field: string): void {
