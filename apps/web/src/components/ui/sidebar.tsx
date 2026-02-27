@@ -52,17 +52,14 @@ function SidebarProvider({
     // We use openProp and setOpenProp for control from outside the component.
     const [_open, _setOpen] = React.useState(defaultOpen);
     const open = openProp ?? _open;
-    const setOpen = React.useCallback(
-        (value: boolean | ((value: boolean) => boolean)) => {
-            if (setOpenProp) {
-                const openState = typeof value === 'function' ? value(open) : value;
-                setOpenProp(openState);
-            } else {
-                _setOpen((currentOpen) => (typeof value === 'function' ? value(currentOpen) : value));
-            }
-        },
-        [setOpenProp, open],
-    );
+    const setOpen = (value: boolean | ((value: boolean) => boolean)) => {
+        if (setOpenProp) {
+            const openState = typeof value === 'function' ? value(open) : value;
+            setOpenProp(openState);
+        } else {
+            _setOpen((currentOpen) => (typeof value === 'function' ? value(currentOpen) : value));
+        }
+    };
 
     React.useEffect(() => {
         const cookieStoreApi = window.cookieStore;
@@ -78,9 +75,9 @@ function SidebarProvider({
     }, [open]);
 
     // Helper to toggle the sidebar.
-    const toggleSidebar = React.useCallback(() => {
+    const toggleSidebar = () => {
         return setOpen((open) => !open);
-    }, [setOpen]);
+    };
 
     // Adds a keyboard shortcut to toggle the sidebar.
     React.useEffect(() => {
@@ -107,15 +104,12 @@ function SidebarProvider({
     // This makes it easier to style the sidebar with Tailwind classes.
     const state = open ? 'expanded' : 'collapsed';
 
-    const contextValue = React.useMemo<SidebarContextProps>(
-        () => ({
-            open,
-            setOpen,
-            state,
-            toggleSidebar,
-        }),
-        [state, open, setOpen, toggleSidebar],
-    );
+    const contextValue: SidebarContextProps = {
+        open,
+        setOpen,
+        state,
+        toggleSidebar,
+    };
 
     return (
         <SidebarContext.Provider value={contextValue}>

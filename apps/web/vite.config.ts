@@ -28,7 +28,7 @@ export default defineConfig({
         'import.meta.env.VITE_BPB_REPOSITORY_URL': JSON.stringify(repositoryUrl),
         'import.meta.env.VITE_BPB_VERSION': JSON.stringify(appVersion),
     },
-    plugins: [tailwindcss(), react()],
+    plugins: [tailwindcss(), react({ babel: { plugins: ['babel-plugin-react-compiler'] } })],
     resolve: {
         alias: {
             '@': path.resolve(__dirname, './src'),

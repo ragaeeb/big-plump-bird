@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { createContext, type ReactNode, useContext } from 'react';
 import { getHealth, getJobs, getOptions, getRecentVideos, getStats } from '@/lib/api';
 
 const QUERY_KEYS = {
@@ -40,10 +40,8 @@ function useDashboardData() {
         retry: 1,
     });
 
-    const activeJobs = useMemo(() => {
-        const jobs = jobsQuery.data ?? [];
-        return jobs.filter((job) => job.status === 'queued' || job.status === 'running').length;
-    }, [jobsQuery.data]);
+    const jobs = jobsQuery.data ?? [];
+    const activeJobs = jobs.filter((job) => job.status === 'queued' || job.status === 'running').length;
 
     const refreshAll = () => {
         void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.jobs });

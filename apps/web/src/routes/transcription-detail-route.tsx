@@ -1,6 +1,6 @@
 import { IconLoader, IconTrash } from '@tabler/icons-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -53,12 +53,9 @@ export function TranscriptionDetailRoute() {
 
     const transcript = transcriptDetailQuery.data;
     const words = transcript?.words ?? [];
-    const activeWordIndex = useMemo(() => findActiveWordIndex(words, currentAudioTimeMs), [currentAudioTimeMs, words]);
-    const captionTrackUri = useMemo(() => buildWordTrackDataUri(words), [words]);
-    const formattedSegments = useMemo(
-        () => formatTranscriptSegments(words, transcript?.text ?? ''),
-        [transcript?.text, words],
-    );
+    const activeWordIndex = findActiveWordIndex(words, currentAudioTimeMs);
+    const captionTrackUri = buildWordTrackDataUri(words);
+    const formattedSegments = formatTranscriptSegments(words, transcript?.text ?? '');
     const audioUrl = transcript?.audioUrl ? resolveApiUrl(transcript.audioUrl) : null;
     const deleteMutation = useMutation({
         mutationFn: () => deleteVideo(transcriptId),

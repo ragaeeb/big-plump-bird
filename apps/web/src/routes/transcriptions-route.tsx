@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -43,9 +43,9 @@ export function TranscriptionsRoute() {
         staleTime: 30_000,
     });
 
-    const channelOptions = useMemo(() => channelsQuery.data ?? [], [channelsQuery.data]);
+    const channelOptions = channelsQuery.data ?? [];
 
-    const sortedTranscripts = useMemo(() => {
+    const sortedTranscripts = (() => {
         const items = [...(transcriptsQuery.data ?? [])];
         const direction = sortDirection === 'asc' ? 1 : -1;
 
@@ -64,7 +64,7 @@ export function TranscriptionsRoute() {
                     return left.createdAt.localeCompare(right.createdAt) * direction;
             }
         });
-    }, [sortDirection, sortKey, transcriptsQuery.data]);
+    })();
 
     const toggleSort = (key: SortKey) => {
         if (sortKey === key) {

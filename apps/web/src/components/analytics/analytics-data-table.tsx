@@ -75,7 +75,7 @@ const dailyColumns: ColumnDef<AnalyticsPoint>[] = [
 ];
 
 function DailyTable({ data }: { data: AnalyticsPoint[] }) {
-    const reversed = React.useMemo(() => [...data].reverse(), [data]);
+    const reversed = [...data].reverse();
     const [rowSelection, setRowSelection] = React.useState({});
     const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
