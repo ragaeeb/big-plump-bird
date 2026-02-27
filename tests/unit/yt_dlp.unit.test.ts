@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -269,9 +269,7 @@ describe('downloadAudio', () => {
         await writeFile(join(dir, 'vid-short.info.json'), infoJson);
         await writeFile(join(dir, 'vid-short.webm'), Buffer.alloc(1000));
 
-        let callCount = 0;
         const spy = spyOn(utils, 'runCommand').mockImplementation(async (_cmd, _args) => {
-            callCount++;
             // First download call succeeds, then ffprobe returns short duration
             if (_cmd === 'ffprobe') {
                 return { exitCode: 0, stderr: '', stdout: '30.0\n' }; // only 30s, expected 60s

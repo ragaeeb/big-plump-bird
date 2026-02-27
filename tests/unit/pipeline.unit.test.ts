@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path';
 import { DEFAULT_CONFIG, DEFAULT_ENHANCEMENT_CONFIG, type RunConfig } from '../../src/core/config';
 import * as ffmpeg from '../../src/core/ffmpeg';
 import { runPipeline } from '../../src/core/pipeline';
-import * as utils from '../../src/core/utils';
 import * as ytDlp from '../../src/core/yt_dlp';
 import { createFakeWhisperx } from '../helpers/fake-whisperx';
 

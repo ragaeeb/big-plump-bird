@@ -22,7 +22,7 @@ const chartConfig = {
 export function ChartAreaInteractive({ data }: { data: AnalyticsPoint[] }) {
     const [timeRange, setTimeRange] = React.useState('90d');
 
-    const filteredData = React.useMemo(() => {
+    const filteredData = (() => {
         if (data.length === 0) {
             return [];
         }
@@ -42,7 +42,7 @@ export function ChartAreaInteractive({ data }: { data: AnalyticsPoint[] }) {
                 ...item,
                 label: item.day.slice(5), // "MM-DD"
             }));
-    }, [data, timeRange]);
+    })();
 
     const rangeLabel = timeRange === '7d' ? 'last 7 days' : timeRange === '30d' ? 'last 30 days' : 'last 3 months';
 
