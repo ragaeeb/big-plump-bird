@@ -169,11 +169,19 @@ function assertInSet(value: string, allowed: Set<string>, field: string): void {
     throw new Error(`Invalid config: ${field} must be one of ${Array.from(allowed).join(', ')}.`);
 }
 
-function assertFiniteAtLeast(value: number, minimum: number, field: string): void {
+function assertFiniteAtLeast(
+    value: number,
+    minimum: number,
+    field: string,
+    options?: { includeNumberWord?: boolean },
+): void {
     if (Number.isFinite(value) && value >= minimum) {
         return;
     }
-    throw new Error(`Invalid config: ${field} must be >= ${minimum}.`);
+    if (options?.includeNumberWord === false) {
+        throw new Error(`Invalid config: ${field} must be >= ${minimum}.`);
+    }
+    throw new Error(`Invalid config: ${field} must be a number >= ${minimum}.`);
 }
 
 function assertFiniteNumber(value: number, field: string): void {
@@ -212,6 +220,6 @@ function assertEnhancementConfig(config: EnhancementConfig): void {
     assertFiniteNumber(config.attenLimDb, 'enhancement.attenLimDb');
     assertFiniteNumber(config.snrSkipThresholdDb, 'enhancement.snrSkipThresholdDb');
     assertFiniteBetween(config.vadThreshold, 0, 1, 'enhancement.vadThreshold');
-    assertFiniteAtLeast(config.minSilenceMs, 0, 'enhancement.minSilenceMs');
-    assertFiniteAtLeast(config.maxRegimes, 1, 'enhancement.maxRegimes');
+    assertFiniteAtLeast(config.minSilenceMs, 0, 'enhancement.minSilenceMs', { includeNumberWord: false });
+    assertFiniteAtLeast(config.maxRegimes, 1, 'enhancement.maxRegimes', { includeNumberWord: false });
 }
