@@ -18,7 +18,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useDashboard } from '@/context/dashboard-context';
-import { deleteVideo, retryVideo } from '@/lib/api';
+import { deleteVideo, retryVideoWithOverrides, type VideoListItem } from '@/lib/api';
+import { parseWitAiApiKeysInput, readWitAiApiKeysInput } from '@/lib/settings';
 import { formatDate, statusClassName } from '@/lib/ui-utils';
 
 type PendingDelete = {
@@ -32,13 +33,17 @@ export function RecentVideosRoute() {
     const [actionError, setActionError] = useState<string | null>(null);
     const [actingOnVideoId, setActingOnVideoId] = useState<string | null>(null);
     const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+    const videos = videosQuery.data ?? [];
 
     const retryMutation = useMutation({
-        mutationFn: retryVideo,
+        mutationFn: ({ videoId }: { videoId: string }) =>
+            retryVideoWithOverrides(videoId, {
+                witAiApiKeys: parseWitAiApiKeysInput(readWitAiApiKeysInput()),
+            }),
         onError: (error) => {
             setActionError(error instanceof Error ? error.message : String(error));
         },
-        onMutate: (videoId) => {
+        onMutate: ({ videoId }) => {
             setActionError(null);
             setActingOnVideoId(videoId);
         },
@@ -97,79 +102,24 @@ export function RecentVideosRoute() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {(videosQuery.data ?? []).length === 0 ? (
+                        {videos.length === 0 ? (
                             <TableRow>
                                 <TableCell className="text-muted-foreground" colSpan={5}>
                                     No videos yet.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            (videosQuery.data ?? []).map((video) => (
-                                <TableRow key={video.videoId}>
-                                    <TableCell>
-                                        <Badge className={statusClassName(video.status)}>{video.status}</Badge>
-                                    </TableCell>
-                                    <TableCell className="max-w-[50ch]">
-                                        <div className="truncate font-medium">{video.title ?? 'Untitled'}</div>
-                                        <div className="text-muted-foreground truncate text-xs">{video.sourceUri}</div>
-                                    </TableCell>
-                                    <TableCell>{video.language ?? '-'}</TableCell>
-                                    <TableCell>{formatDate(video.updatedAt)}</TableCell>
-                                    <TableCell className="text-right">
-                                        <div className="flex justify-end gap-2">
-                                            {video.status === 'error' ||
-                                            video.status === 'failed' ||
-                                            video.status === 'processing' ? (
-                                                <Button
-                                                    className="gap-2"
-                                                    disabled={retryMutation.isPending || deleteMutation.isPending}
-                                                    onClick={() => retryMutation.mutate(video.videoId)}
-                                                    size="sm"
-                                                    variant="outline"
-                                                >
-                                                    {actingOnVideoId === video.videoId && retryMutation.isPending ? (
-                                                        <IconLoader className="size-4 animate-spin" />
-                                                    ) : (
-                                                        <IconRefresh className="size-4" />
-                                                    )}
-                                                    Retry
-                                                </Button>
-                                            ) : (
-                                                <Button
-                                                    disabled={
-                                                        !video.transcriptPreview ||
-                                                        retryMutation.isPending ||
-                                                        deleteMutation.isPending
-                                                    }
-                                                    onClick={() => navigate(`/transcriptions/${video.videoId}`)}
-                                                    size="sm"
-                                                    variant="outline"
-                                                >
-                                                    Open transcript
-                                                </Button>
-                                            )}
-                                            <Button
-                                                className="gap-2"
-                                                disabled={retryMutation.isPending || deleteMutation.isPending}
-                                                onClick={() =>
-                                                    setPendingDelete({
-                                                        title: video.title ?? 'Untitled',
-                                                        videoId: video.videoId,
-                                                    })
-                                                }
-                                                size="sm"
-                                                variant="destructive"
-                                            >
-                                                {actingOnVideoId === video.videoId && deleteMutation.isPending ? (
-                                                    <IconLoader className="size-4 animate-spin" />
-                                                ) : (
-                                                    <IconTrash className="size-4" />
-                                                )}
-                                                Delete
-                                            </Button>
-                                        </div>
-                                    </TableCell>
-                                </TableRow>
+                            videos.map((video) => (
+                                <RecentVideoTableRow
+                                    actingOnVideoId={actingOnVideoId}
+                                    deletePending={deleteMutation.isPending}
+                                    key={video.videoId}
+                                    navigateToTranscript={(videoId) => navigate(`/transcriptions/${videoId}`)}
+                                    onDeleteRequest={(entry) => setPendingDelete(entry)}
+                                    onRetry={(videoId) => retryMutation.mutate({ videoId })}
+                                    retryPending={retryMutation.isPending}
+                                    video={video}
+                                />
                             ))
                         )}
                     </TableBody>
@@ -207,5 +157,90 @@ export function RecentVideosRoute() {
                 </AlertDialog>
             </CardContent>
         </Card>
+    );
+}
+
+function RecentVideoTableRow({
+    actingOnVideoId,
+    deletePending,
+    navigateToTranscript,
+    onDeleteRequest,
+    onRetry,
+    retryPending,
+    video,
+}: {
+    actingOnVideoId: string | null;
+    deletePending: boolean;
+    navigateToTranscript: (videoId: string) => void;
+    onDeleteRequest: (entry: PendingDelete) => void;
+    onRetry: (videoId: string) => void;
+    retryPending: boolean;
+    video: VideoListItem;
+}) {
+    const isBusy = retryPending || deletePending;
+    const isRetryable = video.status === 'error' || video.status === 'failed' || video.status === 'processing';
+    const showRetrySpinner = actingOnVideoId === video.videoId && retryPending;
+    const showDeleteSpinner = actingOnVideoId === video.videoId && deletePending;
+
+    return (
+        <TableRow>
+            <TableCell>
+                <Badge className={statusClassName(video.status)}>{video.status}</Badge>
+            </TableCell>
+            <TableCell className="max-w-[50ch]">
+                <div className="truncate font-medium">{video.title ?? 'Untitled'}</div>
+                <div className="text-muted-foreground truncate text-xs">{video.sourceUri}</div>
+            </TableCell>
+            <TableCell>{video.language ?? '-'}</TableCell>
+            <TableCell>{formatDate(video.updatedAt)}</TableCell>
+            <TableCell className="text-right">
+                <div className="flex justify-end gap-2">
+                    {isRetryable ? (
+                        <Button
+                            className="gap-2"
+                            disabled={isBusy}
+                            onClick={() => onRetry(video.videoId)}
+                            size="sm"
+                            variant="outline"
+                        >
+                            {showRetrySpinner ? (
+                                <IconLoader className="size-4 animate-spin" />
+                            ) : (
+                                <IconRefresh className="size-4" />
+                            )}
+                            Retry
+                        </Button>
+                    ) : (
+                        <Button
+                            disabled={!video.transcriptPreview || isBusy}
+                            onClick={() => navigateToTranscript(video.videoId)}
+                            size="sm"
+                            variant="outline"
+                        >
+                            Open transcript
+                        </Button>
+                    )}
+                    <Button
+                        className="gap-2"
+                        disabled={isBusy}
+                        onClick={() =>
+                            onDeleteRequest({
+                                title: video.title ?? 'Untitled',
+                                videoId: video.videoId,
+                            })
+                        }
+                        size="sm"
+                        variant="destructive"
+                    >
+                        {showDeleteSpinner ? (
+                            <IconLoader className="size-4 animate-spin" />
+                        ) : (
+                            <IconTrash className="size-4" />
+                        )}
+                        Delete
+                    </Button>
+                </div>
+            </TableCell>
+        </TableRow>
     );
 }

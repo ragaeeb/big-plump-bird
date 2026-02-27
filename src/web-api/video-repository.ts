@@ -15,6 +15,8 @@ export type VideoRetryCandidate = {
     videoId: string;
     sourceUri: string;
     status: string;
+    runEngine: string | null;
+    runEngineVersion: string | null;
     runLanguage: string | null;
     runModelPath: string | null;
     runOutputFormatsJson: string | null;
@@ -46,6 +48,8 @@ type VideoRetryRow = {
     video_id: string;
     source_uri: string;
     status: string;
+    run_engine: string | null;
+    run_engine_version: string | null;
     run_language: string | null;
     run_model_path: string | null;
     run_output_formats_json: string | null;
@@ -103,6 +107,8 @@ export function getVideoRetryCandidate(db: Database, videoId: string): VideoRetr
                 v.video_id,
                 v.source_uri,
                 v.status,
+                v.run_engine,
+                v.run_engine_version,
                 v.run_language,
                 v.run_model_path,
                 v.run_output_formats_json,
@@ -127,6 +133,8 @@ export function getVideoRetryCandidate(db: Database, videoId: string): VideoRetr
 
     return {
         latestEnhancementConfigJson: row.latest_enhancement_config_json,
+        runEngine: row.run_engine,
+        runEngineVersion: row.run_engine_version,
         runEnhancementJson: row.run_enhancement_json,
         runLanguage: row.run_language,
         runModelPath: row.run_model_path,

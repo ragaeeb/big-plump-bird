@@ -4,6 +4,7 @@ export const FALLBACK_OPTIONS: ApiOptions = {
     defaults: {
         attenLimDb: 12,
         dereverbMode: 'off',
+        engine: 'whisperx',
         enhancementMode: 'off',
         language: 'en',
         modelPath: 'turbo',
@@ -15,6 +16,10 @@ export const FALLBACK_OPTIONS: ApiOptions = {
         { label: 'Off', value: 'off' },
         { label: 'Auto', value: 'auto' },
         { label: 'On', value: 'on' },
+    ],
+    engines: [
+        { label: 'WhisperX (local)', value: 'whisperx' },
+        { label: 'Tafrigh (wit.ai)', value: 'tafrigh' },
     ],
     enhancementModes: [
         { label: 'Off', value: 'off' },

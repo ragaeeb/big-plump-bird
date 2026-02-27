@@ -9,6 +9,9 @@
     "bugs": {
         "url": "https://github.com/ragaeeb/big-plump-bird/issues"
     },
+    "dependencies": {
+        "tafrigh": "^4.1.1"
+    },
     "description": "Local-first Bun + WhisperX transcription pipeline for mixed Arabic and English media.",
     "devDependencies": {
         "@biomejs/biome": "^2.4.4",

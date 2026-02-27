@@ -26,6 +26,7 @@ const VIDEO_ID_ENCODED_RE = /^[A-Za-z0-9_-]+$/;
 const ENHANCEMENT_MODES = new Set(['off', 'auto', 'on', 'analyze-only']);
 const SOURCE_CLASSES = new Set(['auto', 'studio', 'podium', 'far-field', 'cassette']);
 const DEREVERB_MODES = new Set(['off', 'auto', 'on']);
+const TRANSCRIPTION_ENGINES = new Set(['whisperx', 'tafrigh']);
 const DEFAULT_CONFIG_PATH = resolve(import.meta.dir, '../../config.json');
 const CONFIG_PATH = resolve(Bun.env.BPB_CONFIG_PATH ?? DEFAULT_CONFIG_PATH);
 
@@ -74,7 +75,7 @@ async function handleApiRequest(request: Request, url: URL): Promise<Response> {
         return handleDeleteVideo(url.pathname);
     }
     if (request.method === 'POST' && url.pathname.startsWith('/api/videos/') && url.pathname.endsWith('/retry')) {
-        return handleRetryVideo(url.pathname);
+        return handleRetryVideo(request, url.pathname);
     }
     if (request.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         return handleGetJob(url.pathname);
@@ -141,7 +142,7 @@ function handleGetVideos(url: URL): Response {
     return json({ videos: listRecentVideos(db, limit) });
 }
 
-function handleRetryVideo(pathname: string): Response {
+async function handleRetryVideo(request: Request, pathname: string): Promise<Response> {
     const prefix = '/api/videos/';
     const suffix = '/retry';
     const encodedVideoId = pathname.slice(prefix.length, -suffix.length);
@@ -174,10 +175,18 @@ function handleRetryVideo(pathname: string): Response {
         return json({ error: `Video source is unavailable for retry: ${videoId}` }, { status: 422 });
     }
 
+    let requestOverrides: JobOverrides | undefined;
+    try {
+        requestOverrides = await readRetryOverrides(request);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, { status: 400 });
+    }
+    const combinedOverrides = mergeOverrides(buildRetryOverrides(candidate), requestOverrides);
     const job = jobManager.createJob({
         force: true,
         input,
-        overrides: buildRetryOverrides(candidate),
+        overrides: combinedOverrides,
     });
     return json({ job }, { status: 201 });
 }
@@ -303,6 +312,7 @@ function buildOptionsResponse(config: Awaited<ReturnType<typeof loadConfig>>): R
         defaults: {
             attenLimDb: config.enhancement.attenLimDb,
             dereverbMode: config.enhancement.dereverbMode,
+            engine: config.engine,
             enhancementMode: config.enhancement.mode,
             language: config.language,
             modelPath: config.modelPath,
@@ -314,6 +324,10 @@ function buildOptionsResponse(config: Awaited<ReturnType<typeof loadConfig>>): R
             { label: 'Off', value: 'off' },
             { label: 'Auto', value: 'auto' },
             { label: 'On', value: 'on' },
+        ],
+        engines: [
+            { label: 'WhisperX (local)', value: 'whisperx' },
+            { label: 'Tafrigh (wit.ai)', value: 'tafrigh' },
         ],
         enhancementModes: [
             { label: 'Off', value: 'off' },
@@ -394,58 +408,9 @@ function withCors(response: Response): Response {
 }
 
 function validateCreateJobRequest(raw: CreateJobRequest): CreateJobRequest {
-    if (!raw || typeof raw !== 'object') {
-        throw new Error('Invalid job payload.');
-    }
-
-    const input = typeof raw.input === 'string' ? raw.input.trim() : '';
-    if (input.length === 0) {
-        throw new Error('input is required');
-    }
-
-    const overrides = raw.overrides;
-    if (overrides !== undefined) {
-        if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
-            throw new Error('overrides must be an object');
-        }
-
-        if (overrides.language !== undefined && typeof overrides.language !== 'string') {
-            throw new Error('overrides.language must be a string');
-        }
-        if (overrides.modelPath !== undefined && typeof overrides.modelPath !== 'string') {
-            throw new Error('overrides.modelPath must be a string');
-        }
-        if (
-            overrides.outputFormats !== undefined &&
-            (!Array.isArray(overrides.outputFormats) ||
-                overrides.outputFormats.some((value) => typeof value !== 'string'))
-        ) {
-            throw new Error('overrides.outputFormats must be an array of strings');
-        }
-        if (overrides.enhancementMode !== undefined && !ENHANCEMENT_MODES.has(overrides.enhancementMode)) {
-            throw new Error('overrides.enhancementMode is invalid');
-        }
-        if (overrides.sourceClass !== undefined && !SOURCE_CLASSES.has(overrides.sourceClass)) {
-            throw new Error('overrides.sourceClass is invalid');
-        }
-        if (overrides.dereverbMode !== undefined && !DEREVERB_MODES.has(overrides.dereverbMode)) {
-            throw new Error('overrides.dereverbMode is invalid');
-        }
-        if (
-            overrides.attenLimDb !== undefined &&
-            (!Number.isFinite(overrides.attenLimDb) || overrides.attenLimDb < 0 || overrides.attenLimDb > 60)
-        ) {
-            throw new Error('overrides.attenLimDb must be between 0 and 60');
-        }
-        if (
-            overrides.snrSkipThresholdDb !== undefined &&
-            (!Number.isFinite(overrides.snrSkipThresholdDb) ||
-                overrides.snrSkipThresholdDb < -20 ||
-                overrides.snrSkipThresholdDb > 60)
-        ) {
-            throw new Error('overrides.snrSkipThresholdDb must be between -20 and 60');
-        }
-    }
+    assertValidJobPayload(raw);
+    const input = normalizeJobInput(raw.input);
+    validateJobOverrides(raw.overrides);
 
     return {
         force: raw.force === true,
@@ -455,6 +420,8 @@ function validateCreateJobRequest(raw: CreateJobRequest): CreateJobRequest {
 }
 
 function buildRetryOverrides(candidate: {
+    runEngine: string | null;
+    runEngineVersion: string | null;
     runLanguage: string | null;
     runModelPath: string | null;
     runOutputFormatsJson: string | null;
@@ -462,40 +429,35 @@ function buildRetryOverrides(candidate: {
     latestEnhancementConfigJson: string | null;
 }): JobOverrides | undefined {
     const overrides: JobOverrides = {};
-
-    if (candidate.runLanguage && candidate.runLanguage.trim().length > 0) {
-        overrides.language = candidate.runLanguage.trim();
-    }
-    if (candidate.runModelPath && candidate.runModelPath.trim().length > 0) {
-        overrides.modelPath = candidate.runModelPath.trim();
-    }
-
+    applyRetryEngineOverride(candidate, overrides);
+    applyRetryStringOverrides(candidate, overrides);
     const outputFormats = parseStringArray(candidate.runOutputFormatsJson);
     if (outputFormats.length > 0) {
         overrides.outputFormats = outputFormats;
     }
-
-    const enhancement =
-        parseJsonObject(candidate.runEnhancementJson) ?? parseJsonObject(candidate.latestEnhancementConfigJson);
-    if (enhancement) {
-        if (typeof enhancement.mode === 'string') {
-            overrides.enhancementMode = enhancement.mode as JobOverrides['enhancementMode'];
-        }
-        if (typeof enhancement.sourceClass === 'string') {
-            overrides.sourceClass = enhancement.sourceClass as JobOverrides['sourceClass'];
-        }
-        if (typeof enhancement.dereverbMode === 'string') {
-            overrides.dereverbMode = enhancement.dereverbMode as JobOverrides['dereverbMode'];
-        }
-        if (typeof enhancement.attenLimDb === 'number') {
-            overrides.attenLimDb = enhancement.attenLimDb;
-        }
-        if (typeof enhancement.snrSkipThresholdDb === 'number') {
-            overrides.snrSkipThresholdDb = enhancement.snrSkipThresholdDb;
-        }
-    }
+    applyRetryEnhancementOverrides(candidate, overrides);
 
     return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+async function readRetryOverrides(request: Request): Promise<JobOverrides | undefined> {
+    if (request.body === null) {
+        return undefined;
+    }
+    const payload = (await readJson(request)) as { overrides?: CreateJobRequest['overrides'] };
+    if (!payload || typeof payload !== 'object') {
+        return undefined;
+    }
+    const overrides = payload.overrides;
+    validateJobOverrides(overrides);
+    return overrides;
+}
+
+function mergeOverrides(base: JobOverrides | undefined, extra: JobOverrides | undefined): JobOverrides | undefined {
+    if (!base && !extra) {
+        return undefined;
+    }
+    return { ...(base ?? {}), ...(extra ?? {}) };
 }
 
 function parseStringArray(raw: string | null): string[] {
@@ -647,36 +609,208 @@ function parseRangeHeader(rangeHeader: string, totalSize: number): { start: numb
         return null;
     }
 
-    let start = 0;
-    let end = totalSize - 1;
-
-    if (startRaw.length > 0) {
-        start = Number.parseInt(startRaw, 10);
-        if (!Number.isFinite(start) || start < 0) {
-            return null;
-        }
+    const start = parseRangePart(startRaw);
+    if (start === null) {
+        return null;
     }
-
-    if (endRaw.length > 0) {
-        const parsedEnd = Number.parseInt(endRaw, 10);
-        if (!Number.isFinite(parsedEnd) || parsedEnd < 0) {
-            return null;
-        }
-        if (startRaw.length === 0) {
-            const suffixLength = parsedEnd;
-            if (suffixLength <= 0) {
-                return null;
-            }
-            start = Math.max(0, totalSize - suffixLength);
-            end = totalSize - 1;
-        } else {
-            end = Math.min(parsedEnd, totalSize - 1);
-        }
-    }
-
-    if (start > end || start >= totalSize) {
+    const parsed = resolveRangeBounds(startRaw, endRaw, totalSize, start);
+    if (!parsed) {
         return null;
     }
 
-    return { end, start };
+    if (parsed.start > parsed.end || parsed.start >= totalSize) {
+        return null;
+    }
+
+    return parsed;
+}
+
+function assertValidJobPayload(raw: CreateJobRequest): void {
+    if (!raw || typeof raw !== 'object') {
+        throw new Error('Invalid job payload.');
+    }
+}
+
+function normalizeJobInput(input: unknown): string {
+    const normalized = typeof input === 'string' ? input.trim() : '';
+    if (normalized.length > 0) {
+        return normalized;
+    }
+    throw new Error('input is required');
+}
+
+function validateJobOverrides(overrides: CreateJobRequest['overrides']): void {
+    if (overrides === undefined) {
+        return;
+    }
+    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+        throw new Error('overrides must be an object');
+    }
+
+    validateOverrideString(overrides.language, 'overrides.language');
+    validateOverrideEngine(overrides.engine);
+    validateOverrideStringArray(overrides.witAiApiKeys, 'overrides.witAiApiKeys');
+    validateOverrideString(overrides.modelPath, 'overrides.modelPath');
+    validateOverrideOutputFormats(overrides.outputFormats);
+    validateOverrideEnum(overrides.enhancementMode, ENHANCEMENT_MODES, 'overrides.enhancementMode');
+    validateOverrideEnum(overrides.sourceClass, SOURCE_CLASSES, 'overrides.sourceClass');
+    validateOverrideEnum(overrides.dereverbMode, DEREVERB_MODES, 'overrides.dereverbMode');
+    validateOverrideRange(overrides.attenLimDb, 0, 60, 'overrides.attenLimDb');
+    validateOverrideRange(overrides.snrSkipThresholdDb, -20, 60, 'overrides.snrSkipThresholdDb');
+}
+
+function validateOverrideString(value: unknown, label: string): void {
+    if (value === undefined || typeof value === 'string') {
+        return;
+    }
+    throw new Error(`${label} must be a string`);
+}
+
+function validateOverrideEngine(value: unknown): void {
+    if (value === undefined) {
+        return;
+    }
+    if (typeof value === 'string' && TRANSCRIPTION_ENGINES.has(value)) {
+        return;
+    }
+    throw new Error('overrides.engine is invalid');
+}
+
+function validateOverrideOutputFormats(value: unknown): void {
+    if (value === undefined) {
+        return;
+    }
+    const isValidArray = Array.isArray(value) && value.every((item) => typeof item === 'string');
+    if (isValidArray) {
+        return;
+    }
+    throw new Error('overrides.outputFormats must be an array of strings');
+}
+
+function validateOverrideStringArray(value: unknown, label: string): void {
+    if (value === undefined) {
+        return;
+    }
+    const isValidArray = Array.isArray(value) && value.every((item) => typeof item === 'string');
+    if (isValidArray) {
+        return;
+    }
+    throw new Error(`${label} must be an array of strings`);
+}
+
+function validateOverrideEnum(value: unknown, set: Set<string>, label: string): void {
+    if (value === undefined) {
+        return;
+    }
+    if (typeof value === 'string' && set.has(value)) {
+        return;
+    }
+    throw new Error(`${label} is invalid`);
+}
+
+function validateOverrideRange(value: unknown, min: number, max: number, label: string): void {
+    if (value === undefined) {
+        return;
+    }
+    if (typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max) {
+        return;
+    }
+    throw new Error(`${label} must be between ${min} and ${max}`);
+}
+
+function applyRetryEngineOverride(
+    candidate: {
+        runEngine: string | null;
+        runEngineVersion: string | null;
+        runModelPath: string | null;
+    },
+    overrides: JobOverrides,
+): void {
+    const normalizedEngine = candidate.runEngine?.trim();
+    if (normalizedEngine && TRANSCRIPTION_ENGINES.has(normalizedEngine)) {
+        overrides.engine = normalizedEngine as JobOverrides['engine'];
+        return;
+    }
+    if (
+        candidate.runModelPath?.trim() === 'tafrigh' ||
+        candidate.runEngineVersion?.trim().toLowerCase().startsWith('v4')
+    ) {
+        overrides.engine = 'tafrigh';
+    }
+}
+
+function applyRetryStringOverrides(
+    candidate: { runLanguage: string | null; runModelPath: string | null },
+    overrides: JobOverrides,
+): void {
+    const language = candidate.runLanguage?.trim();
+    if (language) {
+        overrides.language = language;
+    }
+    const modelPath = candidate.runModelPath?.trim();
+    if (modelPath) {
+        overrides.modelPath = modelPath;
+    }
+}
+
+function applyRetryEnhancementOverrides(
+    candidate: { runEnhancementJson: string | null; latestEnhancementConfigJson: string | null },
+    overrides: JobOverrides,
+): void {
+    const enhancement =
+        parseJsonObject(candidate.runEnhancementJson) ?? parseJsonObject(candidate.latestEnhancementConfigJson);
+    if (!enhancement) {
+        return;
+    }
+    if (typeof enhancement.mode === 'string') {
+        overrides.enhancementMode = enhancement.mode as JobOverrides['enhancementMode'];
+    }
+    if (typeof enhancement.sourceClass === 'string') {
+        overrides.sourceClass = enhancement.sourceClass as JobOverrides['sourceClass'];
+    }
+    if (typeof enhancement.dereverbMode === 'string') {
+        overrides.dereverbMode = enhancement.dereverbMode as JobOverrides['dereverbMode'];
+    }
+    if (typeof enhancement.attenLimDb === 'number') {
+        overrides.attenLimDb = enhancement.attenLimDb;
+    }
+    if (typeof enhancement.snrSkipThresholdDb === 'number') {
+        overrides.snrSkipThresholdDb = enhancement.snrSkipThresholdDb;
+    }
+}
+
+function parseRangePart(raw: string): number | null {
+    if (raw.length === 0) {
+        return 0;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed;
+    }
+    return null;
+}
+
+function resolveRangeBounds(
+    startRaw: string,
+    endRaw: string,
+    totalSize: number,
+    start: number,
+): { start: number; end: number } | null {
+    if (endRaw.length === 0) {
+        return { end: totalSize - 1, start };
+    }
+
+    const parsedEnd = Number.parseInt(endRaw, 10);
+    if (!Number.isFinite(parsedEnd) || parsedEnd < 0) {
+        return null;
+    }
+
+    if (startRaw.length === 0) {
+        if (parsedEnd <= 0) {
+            return null;
+        }
+        return { end: totalSize - 1, start: Math.max(0, totalSize - parsedEnd) };
+    }
+
+    return { end: Math.min(parsedEnd, totalSize - 1), start };
 }

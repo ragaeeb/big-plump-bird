@@ -65,7 +65,16 @@ function SidebarProvider({
     );
 
     React.useEffect(() => {
-        document.cookie = `${SIDEBAR_COOKIE_NAME}=${open}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+        const cookieStoreApi = window.cookieStore;
+        if (!cookieStoreApi) {
+            return;
+        }
+        void cookieStoreApi.set({
+            expires: Date.now() + SIDEBAR_COOKIE_MAX_AGE * 1000,
+            name: SIDEBAR_COOKIE_NAME,
+            path: '/',
+            value: String(open),
+        });
     }, [open]);
 
     // Helper to toggle the sidebar.

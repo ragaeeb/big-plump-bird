@@ -18,6 +18,7 @@ import {
 import type { EnhancementResult } from './enhance';
 import { checkEnhancementAvailable, maybeEnhanceAudio } from './enhance';
 import { convertToWav } from './ffmpeg';
+import { runTafrigh } from './tafrigh';
 import { ensureDir, pathExists, sha256String } from './utils';
 import { ensureWhisperXAvailable, runWhisperX } from './whisperx';
 import { downloadAudio, expandYtDlpUrls, getYtDlpId } from './yt_dlp';
@@ -45,6 +46,7 @@ type DataDirs = {
 
 const MAX_EXPAND_DEPTH = 10;
 const MAX_EXPANDED_FILES = 10_000;
+const TAFRIGH_ENGINE_VERSION = 'v4';
 
 export async function runPipeline(config: RunConfig, options: RunOptions): Promise<void> {
     const dirs = await ensureDataDirs(config.dataDir);
@@ -52,70 +54,13 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
     let hadFailures = false;
 
     try {
-        if (options.abortSignal?.aborted) {
+        if (isAborted(options.abortSignal)) {
             return;
         }
-
-        if (!options.dryRun) {
-            await ensureWhisperXAvailable();
-        }
-
-        if (!options.dryRun && config.enhancement.mode !== 'off') {
-            await checkEnhancementAvailable(config.enhancement);
-        }
-
-        if (options.abortSignal?.aborted) {
+        await ensurePipelineReady(config, options);
+        const inputs = await collectInputItems(options);
+        if (isAborted(options.abortSignal)) {
             return;
-        }
-
-        const inputs: InputItem[] = [];
-
-        const expandedPaths = await expandPaths(options.paths);
-        if (options.abortSignal?.aborted) {
-            return;
-        }
-        for (const filePath of expandedPaths) {
-            if (options.abortSignal?.aborted) {
-                return;
-            }
-            inputs.push({ source_type: 'file', source_uri: filePath });
-        }
-
-        const seedUrls: string[] = [];
-        if (options.urlsFile) {
-            const urlLines = await readUrlFile(options.urlsFile);
-            seedUrls.push(...urlLines);
-        }
-        if (options.urls && options.urls.length > 0) {
-            for (const url of options.urls) {
-                const trimmed = url.trim();
-                if (trimmed.length > 0) {
-                    seedUrls.push(trimmed);
-                }
-            }
-        }
-
-        if (seedUrls.length > 0) {
-            const seen = new Set<string>();
-            for (const seedUrl of seedUrls) {
-                if (options.abortSignal?.aborted) {
-                    return;
-                }
-                const expandedUrls = await expandYtDlpUrls(seedUrl);
-                if (expandedUrls.length > 1) {
-                    console.log(`[urls] Expanded ${seedUrl} -> ${expandedUrls.length} video URLs`);
-                }
-                for (const expandedUrl of expandedUrls) {
-                    if (options.abortSignal?.aborted) {
-                        return;
-                    }
-                    if (seen.has(expandedUrl)) {
-                        continue;
-                    }
-                    seen.add(expandedUrl);
-                    inputs.push({ source_type: 'url', source_uri: expandedUrl });
-                }
-            }
         }
 
         if (inputs.length === 0) {
@@ -147,6 +92,71 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
     }
 }
 
+function isAborted(signal?: AbortSignal): boolean {
+    return signal?.aborted === true;
+}
+
+async function ensurePipelineReady(config: RunConfig, options: RunOptions): Promise<void> {
+    if (!options.dryRun && config.engine !== 'tafrigh') {
+        await ensureWhisperXAvailable();
+    }
+    if (!options.dryRun && config.enhancement.mode !== 'off') {
+        await checkEnhancementAvailable(config.enhancement);
+    }
+}
+
+async function collectInputItems(options: RunOptions): Promise<InputItem[]> {
+    const files = await collectPathInputs(options.paths);
+    const urls = await collectUrlInputs(options.urlsFile, options.urls);
+    return [...files, ...urls];
+}
+
+async function collectPathInputs(paths: string[]): Promise<InputItem[]> {
+    const expandedPaths = await expandPaths(paths);
+    return expandedPaths.map((path) => ({ source_type: 'file', source_uri: path }));
+}
+
+async function collectUrlInputs(urlsFile: string | undefined, urls: string[] | undefined): Promise<InputItem[]> {
+    const seedUrls = await collectSeedUrls(urlsFile, urls);
+    if (seedUrls.length === 0) {
+        return [];
+    }
+
+    const inputs: InputItem[] = [];
+    const seen = new Set<string>();
+    for (const seedUrl of seedUrls) {
+        const expandedUrls = await expandYtDlpUrls(seedUrl);
+        if (expandedUrls.length > 1) {
+            console.log(`[urls] Expanded ${seedUrl} -> ${expandedUrls.length} video URLs`);
+        }
+        for (const expandedUrl of expandedUrls) {
+            if (seen.has(expandedUrl)) {
+                continue;
+            }
+            seen.add(expandedUrl);
+            inputs.push({ source_type: 'url', source_uri: expandedUrl });
+        }
+    }
+    return inputs;
+}
+
+async function collectSeedUrls(urlsFile: string | undefined, urls: string[] | undefined): Promise<string[]> {
+    const seedUrls: string[] = [];
+    if (urlsFile) {
+        seedUrls.push(...(await readUrlFile(urlsFile)));
+    }
+    if (!urls || urls.length === 0) {
+        return seedUrls;
+    }
+    for (const url of urls) {
+        const trimmed = url.trim();
+        if (trimmed.length > 0) {
+            seedUrls.push(trimmed);
+        }
+    }
+    return seedUrls;
+}
+
 async function processInput(
     item: InputItem,
     config: RunConfig,
@@ -154,154 +164,205 @@ async function processInput(
     dirs: DataDirs,
     db: Awaited<ReturnType<typeof openDb>>,
 ): Promise<boolean> {
-    const now = new Date().toISOString();
     let videoId: string | null = null;
-
     try {
-        if (item.source_type === 'url') {
-            const url = item.source_uri;
-            if (options.dryRun) {
-                console.log(`[dry-run] Would download and transcribe URL: ${url}`);
-                return true;
-            }
-            videoId = await getYtDlpId(url);
-            if (!options.force && hasTranscript(db, videoId)) {
-                console.log(`Skipping (already transcribed): ${videoId}`);
-                return true;
-            }
-            if (options.force) {
-                deleteVideoData(db, videoId);
-            }
-
-            upsertVideo(db, {
-                created_at: now,
-                run_enhancement_json: JSON.stringify(config.enhancement),
-                run_language: config.language,
-                run_model_path: config.modelPath,
-                run_output_formats_json: JSON.stringify(config.outputFormats),
-                source_type: 'url',
-                source_uri: url,
-                status: 'processing',
-                updated_at: now,
-                video_id: videoId,
-            });
-
-            const format = buildYtDlpFormat(config);
-            const { info, infoJson, filePath, infoJsonPath } = await downloadAudio(url, {
-                downloadVideo: config.downloadVideo,
-                forceOverwrites: options.force,
-                format,
-                id: videoId,
-                outputDir: dirs.sourceAudioDir,
-            });
-
-            const durationMs = typeof info.duration === 'number' ? Math.round(info.duration * 1000) : null;
-
-            upsertVideo(db, {
-                channel: info.channel ?? null,
-                channel_id: info.channel_id ?? null,
-                created_at: now,
-                description: info.description ?? null,
-                duration_ms: durationMs,
-                local_path: filePath,
-                metadata_json: infoJson,
-                run_enhancement_json: JSON.stringify(config.enhancement),
-                run_language: config.language,
-                run_model_path: config.modelPath,
-                run_output_formats_json: JSON.stringify(config.outputFormats),
-                source_type: 'url',
-                source_uri: url,
-                status: 'processing',
-                timestamp: typeof info.timestamp === 'number' ? info.timestamp : null,
-                title: info.title ?? null,
-                updated_at: new Date().toISOString(),
-                upload_date: info.upload_date ?? null,
-                uploader: info.uploader ?? null,
-                uploader_id: info.uploader_id ?? null,
-                video_id: videoId,
-                webpage_url: info.webpage_url ?? url,
-            });
-
-            const chapters = parseChapters(info, videoId);
-            insertChapters(db, chapters);
-
-            await transcribeAndStore({
-                config,
-                db,
-                dirs,
-                infoJsonPath,
-                inputPath: filePath,
-                isUrl: true,
-                options,
-                sourceAudioPath: filePath,
-                videoId,
-            });
-
-            if (!config.keepSourceAudio) {
-                await rm(filePath, { force: true });
-            }
-            return true;
-        }
-
-        if (options.dryRun) {
-            const filePath = resolve(item.source_uri);
-            console.log(`[dry-run] Would transcribe file: ${filePath}`);
-            return true;
-        }
-
-        const filePath = resolve(item.source_uri);
-        const localStats = await stat(filePath);
-        const stableFileKey = `${basename(filePath)}-${localStats.size}-${Math.trunc(localStats.mtimeMs)}`;
-        videoId = sha256String(stableFileKey).slice(0, 32);
-
-        if (!options.force && hasTranscript(db, videoId)) {
-            console.log(`Skipping (already transcribed): ${videoId}`);
-            return true;
-        }
-        if (options.force) {
-            deleteVideoData(db, videoId);
-        }
-
-        upsertVideo(db, {
-            created_at: now,
-            local_path: filePath,
-            run_enhancement_json: JSON.stringify(config.enhancement),
-            run_language: config.language,
-            run_model_path: config.modelPath,
-            run_output_formats_json: JSON.stringify(config.outputFormats),
-            source_type: 'file',
-            source_uri: filePath,
-            status: 'processing',
-            updated_at: now,
-            video_id: videoId,
-        });
-
-        await transcribeAndStore({
-            config,
-            db,
-            dirs,
-            inputPath: filePath,
-            isUrl: false,
-            options,
-            videoId,
-        });
-        return true;
+        const result =
+            item.source_type === 'url'
+                ? await processUrlInput(item.source_uri, config, options, dirs, db)
+                : await processFileInput(item.source_uri, config, options, dirs, db);
+        videoId = result.videoId;
+        return result.success;
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`Error processing ${item.source_uri}: ${message}`);
-        const id = videoId ?? sha256String(item.source_uri).slice(0, 32);
-        const now = new Date().toISOString();
-        upsertVideo(db, {
-            created_at: now,
-            error: message,
-            source_type: item.source_type,
-            source_uri: item.source_uri,
-            status: 'error',
-            updated_at: now,
-            video_id: id,
-        });
+        markInputError(item, config, db, videoId, message);
         return false;
     }
+}
+
+function resolveRunModelPath(config: RunConfig): string {
+    return config.engine === 'tafrigh' ? 'tafrigh' : config.modelPath;
+}
+
+function resolveRunEngineVersion(config: RunConfig): string | null {
+    return config.engine === 'tafrigh' ? TAFRIGH_ENGINE_VERSION : null;
+}
+
+function upsertProcessingVideo(
+    db: Awaited<ReturnType<typeof openDb>>,
+    config: RunConfig,
+    now: string,
+    record: Omit<
+        Parameters<typeof upsertVideo>[1],
+        | 'created_at'
+        | 'run_engine'
+        | 'run_engine_version'
+        | 'run_language'
+        | 'run_model_path'
+        | 'run_output_formats_json'
+        | 'run_enhancement_json'
+        | 'status'
+        | 'updated_at'
+    >,
+): void {
+    upsertVideo(db, {
+        ...record,
+        created_at: now,
+        run_engine: config.engine,
+        run_engine_version: resolveRunEngineVersion(config),
+        run_enhancement_json: JSON.stringify(config.enhancement),
+        run_language: config.language,
+        run_model_path: resolveRunModelPath(config),
+        run_output_formats_json: JSON.stringify(config.outputFormats),
+        status: 'processing',
+        updated_at: now,
+    });
+}
+
+async function processUrlInput(
+    url: string,
+    config: RunConfig,
+    options: RunOptions,
+    dirs: DataDirs,
+    db: Awaited<ReturnType<typeof openDb>>,
+): Promise<{ success: boolean; videoId: string }> {
+    if (options.dryRun) {
+        console.log(`[dry-run] Would download and transcribe URL: ${url}`);
+        return { success: true, videoId: sha256String(url).slice(0, 32) };
+    }
+
+    const videoId = await getYtDlpId(url);
+    if (shouldSkipExistingTranscript(db, videoId, options.force)) {
+        return { success: true, videoId };
+    }
+
+    const now = new Date().toISOString();
+    upsertProcessingVideo(db, config, now, {
+        source_type: 'url',
+        source_uri: url,
+        video_id: videoId,
+    });
+
+    const format = buildYtDlpFormat(config);
+    const { filePath, info, infoJson, infoJsonPath } = await downloadAudio(url, {
+        downloadVideo: config.downloadVideo,
+        forceOverwrites: options.force,
+        format,
+        id: videoId,
+        outputDir: dirs.sourceAudioDir,
+    });
+
+    upsertProcessingVideo(db, config, new Date().toISOString(), {
+        channel: info.channel ?? null,
+        channel_id: info.channel_id ?? null,
+        description: info.description ?? null,
+        duration_ms: typeof info.duration === 'number' ? Math.round(info.duration * 1000) : null,
+        local_path: filePath,
+        metadata_json: infoJson,
+        source_type: 'url',
+        source_uri: url,
+        timestamp: typeof info.timestamp === 'number' ? info.timestamp : null,
+        title: info.title ?? null,
+        upload_date: info.upload_date ?? null,
+        uploader: info.uploader ?? null,
+        uploader_id: info.uploader_id ?? null,
+        video_id: videoId,
+        webpage_url: info.webpage_url ?? url,
+    });
+
+    insertChapters(db, parseChapters(info, videoId));
+    await transcribeAndStore({
+        config,
+        db,
+        dirs,
+        infoJsonPath,
+        inputPath: filePath,
+        isUrl: true,
+        options,
+        sourceAudioPath: filePath,
+        videoId,
+    });
+
+    if (!config.keepSourceAudio) {
+        await rm(filePath, { force: true });
+    }
+    return { success: true, videoId };
+}
+
+async function processFileInput(
+    sourcePath: string,
+    config: RunConfig,
+    options: RunOptions,
+    dirs: DataDirs,
+    db: Awaited<ReturnType<typeof openDb>>,
+): Promise<{ success: boolean; videoId: string }> {
+    const filePath = resolve(sourcePath);
+    if (options.dryRun) {
+        console.log(`[dry-run] Would transcribe file: ${filePath}`);
+        return { success: true, videoId: sha256String(filePath).slice(0, 32) };
+    }
+
+    const localStats = await stat(filePath);
+    const stableFileKey = `${basename(filePath)}-${localStats.size}-${Math.trunc(localStats.mtimeMs)}`;
+    const videoId = sha256String(stableFileKey).slice(0, 32);
+    if (shouldSkipExistingTranscript(db, videoId, options.force)) {
+        return { success: true, videoId };
+    }
+
+    upsertProcessingVideo(db, config, new Date().toISOString(), {
+        local_path: filePath,
+        source_type: 'file',
+        source_uri: filePath,
+        video_id: videoId,
+    });
+
+    await transcribeAndStore({
+        config,
+        db,
+        dirs,
+        inputPath: filePath,
+        isUrl: false,
+        options,
+        videoId,
+    });
+    return { success: true, videoId };
+}
+
+function shouldSkipExistingTranscript(
+    db: Awaited<ReturnType<typeof openDb>>,
+    videoId: string,
+    force: boolean,
+): boolean {
+    if (!force && hasTranscript(db, videoId)) {
+        console.log(`Skipping (already transcribed): ${videoId}`);
+        return true;
+    }
+    if (force) {
+        deleteVideoData(db, videoId);
+    }
+    return false;
+}
+
+function markInputError(
+    item: InputItem,
+    config: RunConfig,
+    db: Awaited<ReturnType<typeof openDb>>,
+    videoId: string | null,
+    message: string,
+): void {
+    const now = new Date().toISOString();
+    const id = videoId ?? sha256String(item.source_uri).slice(0, 32);
+    upsertVideo(db, {
+        created_at: now,
+        error: message,
+        run_engine: config.engine,
+        run_engine_version: resolveRunEngineVersion(config),
+        source_type: item.source_type,
+        source_uri: item.source_uri,
+        status: 'error',
+        updated_at: now,
+        video_id: id,
+    });
 }
 
 async function transcribeAndStore(opts: {
@@ -319,224 +380,341 @@ async function transcribeAndStore(opts: {
     const wavPath = join(dirs.audioDir, `${videoId}.wav`);
     const outputDir = join(dirs.transcriptsDir, videoId);
     const outputBase = join(outputDir, 'transcript');
+    const artifacts: ArtifactRecord[] = [];
 
     await ensureDir(outputDir);
-
     await convertToWav(inputPath, wavPath);
+    const enhancement = await runEnhancementStage(videoId, wavPath, dirs, options, config);
+    const transcription = await runTranscriptionStage(videoId, outputBase, enhancement.wavForTranscription, config);
+    artifacts.push(...transcription.artifacts);
 
-    // --- Enhancement ---
-    let wavForWhisper = wavPath;
-    let enhancementResult: EnhancementResult | null = null;
-    let enhancementError: string | null = null;
-    let enhancementStartedAt: string | null = null;
-    let enhancementFinishedAt: string | null = null;
+    insertTranscript(db, {
+        created_at: new Date().toISOString(),
+        json: buildCompactTranscriptJson(transcription.language, transcription.words),
+        language: transcription.language,
+        model: transcription.model,
+        text: transcription.text,
+        video_id: videoId,
+    });
+    insertSegments(db, transcription.segments);
 
-    if (config.enhancement.mode !== 'off') {
-        enhancementStartedAt = new Date().toISOString();
-        try {
-            enhancementResult = await maybeEnhanceAudio({
-                config: config.enhancement,
-                enhanceDir: dirs.enhanceDir,
-                planInDir: options.enhancePlanIn,
-                planOutDir: options.enhancePlanOut,
-                rawWavPath: wavPath,
-                videoId,
-            });
-            wavForWhisper = enhancementResult.wavPath;
-        } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-            enhancementError = msg;
-            console.error(`[enhance] Error: ${msg}`);
-            if (config.enhancement.failPolicy === 'fail') {
-                throw error;
-            }
-            console.log('[enhance] Falling back to raw audio');
-        } finally {
-            enhancementFinishedAt = new Date().toISOString();
-        }
+    await collectInputArtifacts(artifacts, {
+        config,
+        infoJsonPath,
+        isUrl,
+        sourceAudioPath,
+        videoId,
+        wavPath,
+    });
+    await collectEnhancementArtifacts(artifacts, enhancement.result, videoId);
+    persistEnhancementTelemetry(db, config, enhancement, videoId);
+    insertArtifacts(db, artifacts);
+    updateVideoStatus(db, videoId, 'done', null);
+    await cleanupAudioArtifacts(config, enhancement.result, wavPath);
+}
+
+type EnhancementStageResult = {
+    wavForTranscription: string;
+    result: EnhancementResult | null;
+    error: string | null;
+    finishedAt: string | null;
+    startedAt: string | null;
+};
+
+type TranscriptionStageResult = {
+    artifacts: ArtifactRecord[];
+    language: string;
+    model: string;
+    segments: SegmentRecord[];
+    text: string;
+    words: WordRecord[];
+};
+
+async function runEnhancementStage(
+    videoId: string,
+    wavPath: string,
+    dirs: DataDirs,
+    options: RunOptions,
+    config: RunConfig,
+): Promise<EnhancementStageResult> {
+    const base: EnhancementStageResult = {
+        error: null,
+        finishedAt: null,
+        result: null,
+        startedAt: null,
+        wavForTranscription: wavPath,
+    };
+    if (config.enhancement.mode === 'off') {
+        return base;
     }
 
+    const startedAt = new Date().toISOString();
+    try {
+        const result = await maybeEnhanceAudio({
+            config: config.enhancement,
+            enhanceDir: dirs.enhanceDir,
+            planInDir: options.enhancePlanIn,
+            planOutDir: options.enhancePlanOut,
+            rawWavPath: wavPath,
+            videoId,
+        });
+        return {
+            ...base,
+            finishedAt: new Date().toISOString(),
+            result,
+            startedAt,
+            wavForTranscription: result.wavPath,
+        };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[enhance] Error: ${message}`);
+        if (config.enhancement.failPolicy === 'fail') {
+            throw error;
+        }
+        console.log('[enhance] Falling back to raw audio');
+        return { ...base, error: message, finishedAt: new Date().toISOString(), startedAt };
+    }
+}
+
+async function runTranscriptionStage(
+    videoId: string,
+    outputBase: string,
+    wavPath: string,
+    config: RunConfig,
+): Promise<TranscriptionStageResult> {
+    if (config.engine === 'tafrigh') {
+        return runTafrighStage(videoId, wavPath, config);
+    }
+    return runWhisperxStage(videoId, outputBase, wavPath, config);
+}
+
+async function runTafrighStage(videoId: string, wavPath: string, config: RunConfig): Promise<TranscriptionStageResult> {
+    const tafrighResult = await runTafrigh(wavPath, config.witAiApiKeys, videoId, config.language);
+    const segments = tafrighResult.segments;
+    const words = tafrighResult.words;
+    return {
+        artifacts: [],
+        language: tafrighResult.language,
+        model: `tafrigh ${TAFRIGH_ENGINE_VERSION}`,
+        segments,
+        text:
+            wordsToText(words) ||
+            segments
+                .map((segment) => segment.text)
+                .join(' ')
+                .trim(),
+        words,
+    };
+}
+
+async function runWhisperxStage(
+    videoId: string,
+    outputBase: string,
+    wavPath: string,
+    config: RunConfig,
+): Promise<TranscriptionStageResult> {
     await runWhisperX({
         batchSize: config.whisperxBatchSize,
         computeType: config.whisperxComputeType,
-        formats: config.outputFormats.map((f) => f.toLowerCase()),
+        formats: config.outputFormats.map((format) => format.toLowerCase()),
         language: config.language,
         modelPath: config.modelPath,
         outputBase,
-        wavPath: wavForWhisper,
+        wavPath,
     });
 
     const txtPath = `${outputBase}.txt`;
     const jsonPath = `${outputBase}.json`;
-
     const [txtExists, jsonExists] = await Promise.all([pathExists(txtPath), pathExists(jsonPath)]);
+    const [text, json] = await Promise.all([
+        txtExists ? readFile(txtPath, 'utf-8') : '',
+        jsonExists ? readFile(jsonPath, 'utf-8') : '',
+    ]);
 
-    const text = txtExists ? await readFile(txtPath, 'utf-8') : '';
-    const json = jsonExists ? await readFile(jsonPath, 'utf-8') : '';
     const parsedWhisper = json ? parseWhisperOutput(json, videoId) : null;
     const segments = parsedWhisper?.segments ?? [];
     const words = parsedWhisper?.words ?? [];
-    const transcriptText =
-        text ||
-        wordsToText(words) ||
-        segments
-            .map((s) => s.text)
-            .join(' ')
-            .trim();
-    const compactTranscriptJson = buildCompactTranscriptJson(parsedWhisper?.language ?? config.language, words);
-
-    insertTranscript(db, {
-        created_at: new Date().toISOString(),
-        json: compactTranscriptJson,
+    const artifacts = await collectWhisperArtifacts(videoId, txtPath, jsonPath, txtExists, jsonExists);
+    return {
+        artifacts,
         language: parsedWhisper?.language ?? config.language,
         model: basename(config.modelPath),
-        text: transcriptText,
-        video_id: videoId,
-    });
+        segments,
+        text:
+            text ||
+            wordsToText(words) ||
+            segments
+                .map((segment) => segment.text)
+                .join(' ')
+                .trim(),
+        words,
+    };
+}
 
-    insertSegments(db, segments);
-
+async function collectWhisperArtifacts(
+    videoId: string,
+    txtPath: string,
+    jsonPath: string,
+    txtExists: boolean,
+    jsonExists: boolean,
+): Promise<ArtifactRecord[]> {
     const artifacts: ArtifactRecord[] = [];
-
-    if (config.keepWav && (await pathExists(wavPath))) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'audio_wav',
-            size_bytes: await fileSize(wavPath),
-            uri: wavPath,
-            video_id: videoId,
-        });
-    }
-
-    if (isUrl && config.keepSourceAudio && sourceAudioPath) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'source_audio',
-            size_bytes: await fileSize(sourceAudioPath),
-            uri: sourceAudioPath,
-            video_id: videoId,
-        });
-    }
-
-    if (isUrl && infoJsonPath && (await pathExists(infoJsonPath))) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'source_info_json',
-            size_bytes: await fileSize(infoJsonPath),
-            uri: infoJsonPath,
-            video_id: videoId,
-        });
-    }
-
     if (txtExists) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'transcript_txt',
-            size_bytes: await fileSize(txtPath),
-            uri: txtPath,
-            video_id: videoId,
-        });
+        artifacts.push(await buildArtifact(videoId, 'transcript_txt', txtPath));
     }
-
     if (jsonExists) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'transcript_json',
-            size_bytes: await fileSize(jsonPath),
-            uri: jsonPath,
-            video_id: videoId,
-        });
+        artifacts.push(await buildArtifact(videoId, 'transcript_json', jsonPath));
     }
+    return artifacts;
+}
 
-    // Enhancement artifacts and telemetry
-    if (enhancementResult) {
-        for (const art of enhancementResult.artifacts) {
-            if (await pathExists(art.path)) {
-                artifacts.push({
-                    created_at: new Date().toISOString(),
-                    kind: art.kind,
-                    size_bytes: await fileSize(art.path),
-                    uri: art.path,
-                    video_id: videoId,
-                });
-            }
+async function collectInputArtifacts(
+    artifacts: ArtifactRecord[],
+    opts: {
+        config: RunConfig;
+        infoJsonPath?: string;
+        isUrl: boolean;
+        sourceAudioPath?: string;
+        videoId: string;
+        wavPath: string;
+    },
+): Promise<void> {
+    const { config, infoJsonPath, isUrl, sourceAudioPath, videoId, wavPath } = opts;
+    if (config.keepWav && (await pathExists(wavPath))) {
+        artifacts.push(await buildArtifact(videoId, 'audio_wav', wavPath));
+    }
+    if (isUrl && config.keepSourceAudio && sourceAudioPath) {
+        artifacts.push(await buildArtifact(videoId, 'source_audio', sourceAudioPath));
+    }
+    if (isUrl && infoJsonPath && (await pathExists(infoJsonPath))) {
+        artifacts.push(await buildArtifact(videoId, 'source_info_json', infoJsonPath));
+    }
+}
+
+async function collectEnhancementArtifacts(
+    artifacts: ArtifactRecord[],
+    enhancementResult: EnhancementResult | null,
+    videoId: string,
+): Promise<void> {
+    if (!enhancementResult) {
+        return;
+    }
+    for (const artifact of enhancementResult.artifacts) {
+        if (await pathExists(artifact.path)) {
+            artifacts.push(await buildArtifact(videoId, artifact.kind, artifact.path));
         }
+    }
+}
 
-        const analysis = enhancementResult.analysis;
-        const proc = enhancementResult.processingResult;
-
-        const runId = insertEnhancementRun(db, {
-            applied: enhancementResult.applied ? 1 : 0,
-            config_json: JSON.stringify(config.enhancement),
-            duration_ms: proc?.processing_ms ?? null,
-            error: null,
-            finished_at: enhancementResult.finishedAt,
-            metrics_json: JSON.stringify({
-                analysis_duration_ms: analysis?.analysis_duration_ms,
-                processing_ms: proc?.processing_ms,
-                speech_ratio: analysis?.speech_ratio,
-            }),
-            mode: enhancementResult.mode,
-            regime_count: analysis?.regime_count ?? 0,
-            skip_reason: enhancementResult.skipReason ?? null,
-            snr_db: analysis?.snr_db ?? null,
-            source_class: config.enhancement.sourceClass,
-            started_at: enhancementResult.startedAt,
-            status: enhancementResult.applied ? 'completed' : 'skipped',
-            versions_json: JSON.stringify({
-                analysis: analysis?.versions ?? {},
-                processing: proc?.versions ?? {},
-            }),
-            video_id: videoId,
-        });
-
-        if (proc && analysis) {
-            const enhSegments: EnhancementSegmentRecord[] = proc.segments.map((seg) => {
-                const regime = analysis.regimes.find((r) => r.index === seg.segment_index);
-                return {
-                    atten_lim_db: seg.atten_lim_db,
-                    denoise_applied: seg.denoise_applied ? 1 : 0,
-                    dereverb_applied: seg.dereverb_applied ? 1 : 0,
-                    end_ms: seg.end_ms,
-                    noise_rms_db: regime?.noise_rms_db ?? null,
-                    processing_ms: seg.processing_ms,
-                    run_id: runId,
-                    segment_index: seg.segment_index,
-                    spectral_centroid_hz: regime?.spectral_centroid_hz ?? null,
-                    speech_ratio: null,
-                    start_ms: seg.start_ms,
-                };
-            });
-            insertEnhancementSegments(db, enhSegments);
-        }
-    } else if (config.enhancement.mode !== 'off' && enhancementError) {
+function persistEnhancementTelemetry(
+    db: Awaited<ReturnType<typeof openDb>>,
+    config: RunConfig,
+    enhancement: EnhancementStageResult,
+    videoId: string,
+): void {
+    if (enhancement.result) {
+        persistEnhancementRun(db, config, enhancement.result, videoId);
+        return;
+    }
+    if (config.enhancement.mode !== 'off' && enhancement.error) {
         insertEnhancementRun(db, {
             applied: 0,
             config_json: JSON.stringify(config.enhancement),
             duration_ms: null,
-            error: enhancementError,
-            finished_at: enhancementFinishedAt ?? new Date().toISOString(),
+            error: enhancement.error,
+            finished_at: enhancement.finishedAt ?? new Date().toISOString(),
             metrics_json: JSON.stringify({}),
             mode: config.enhancement.mode,
             regime_count: 0,
             skip_reason: null,
             snr_db: null,
             source_class: config.enhancement.sourceClass,
-            started_at: enhancementStartedAt ?? new Date().toISOString(),
+            started_at: enhancement.startedAt ?? new Date().toISOString(),
             status: 'error',
             versions_json: JSON.stringify({}),
             video_id: videoId,
         });
     }
+}
 
-    insertArtifacts(db, artifacts);
-    updateVideoStatus(db, videoId, 'done', null);
+function persistEnhancementRun(
+    db: Awaited<ReturnType<typeof openDb>>,
+    config: RunConfig,
+    result: EnhancementResult,
+    videoId: string,
+): void {
+    const analysis = result.analysis;
+    const processing = result.processingResult;
+    const runId = insertEnhancementRun(db, {
+        applied: result.applied ? 1 : 0,
+        config_json: JSON.stringify(config.enhancement),
+        duration_ms: processing?.processing_ms ?? null,
+        error: null,
+        finished_at: result.finishedAt,
+        metrics_json: JSON.stringify({
+            analysis_duration_ms: analysis?.analysis_duration_ms,
+            processing_ms: processing?.processing_ms,
+            speech_ratio: analysis?.speech_ratio,
+        }),
+        mode: result.mode,
+        regime_count: analysis?.regime_count ?? 0,
+        skip_reason: result.skipReason ?? null,
+        snr_db: analysis?.snr_db ?? null,
+        source_class: config.enhancement.sourceClass,
+        started_at: result.startedAt,
+        status: result.applied ? 'completed' : 'skipped',
+        versions_json: JSON.stringify({
+            analysis: analysis?.versions ?? {},
+            processing: processing?.versions ?? {},
+        }),
+        video_id: videoId,
+    });
+    if (processing && analysis) {
+        insertEnhancementSegments(db, toEnhancementSegments(runId, processing, analysis));
+    }
+}
 
+function toEnhancementSegments(
+    runId: number,
+    processing: NonNullable<EnhancementResult['processingResult']>,
+    analysis: NonNullable<EnhancementResult['analysis']>,
+): EnhancementSegmentRecord[] {
+    return processing.segments.map((segment) => {
+        const regime = analysis.regimes.find((entry) => entry.index === segment.segment_index);
+        return {
+            atten_lim_db: segment.atten_lim_db,
+            denoise_applied: segment.denoise_applied ? 1 : 0,
+            dereverb_applied: segment.dereverb_applied ? 1 : 0,
+            end_ms: segment.end_ms,
+            noise_rms_db: regime?.noise_rms_db ?? null,
+            processing_ms: segment.processing_ms,
+            run_id: runId,
+            segment_index: segment.segment_index,
+            spectral_centroid_hz: regime?.spectral_centroid_hz ?? null,
+            speech_ratio: null,
+            start_ms: segment.start_ms,
+        };
+    });
+}
+
+async function buildArtifact(videoId: string, kind: string, uri: string): Promise<ArtifactRecord> {
+    return {
+        created_at: new Date().toISOString(),
+        kind,
+        size_bytes: await fileSize(uri),
+        uri,
+        video_id: videoId,
+    };
+}
+
+async function cleanupAudioArtifacts(
+    config: RunConfig,
+    enhancementResult: EnhancementResult | null,
+    wavPath: string,
+): Promise<void> {
     if (!config.keepWav) {
         await rm(wavPath, { force: true });
     }
-
-    // Clean up enhanced WAV if intermediate files aren't kept
     if (enhancementResult?.applied && !config.enhancement.keepIntermediate && enhancementResult.wavPath !== wavPath) {
         await rm(enhancementResult.wavPath, { force: true });
     }
@@ -568,61 +746,86 @@ function parseWhisperOutput(
         return {
             language,
             segments: segmentsSource
-                .filter((seg) => typeof seg.text === 'string')
-                .map((seg) => {
-                    const wordItems = Array.isArray(seg.words) ? seg.words : [];
-                    const cleanWords = wordItems
-                        .filter(
-                            (word: any) =>
-                                typeof word.word === 'string' &&
-                                typeof word.start === 'number' &&
-                                typeof word.end === 'number' &&
-                                Number.isFinite(word.start) &&
-                                Number.isFinite(word.end) &&
-                                word.start >= 0 &&
-                                word.end >= word.start,
-                        )
-                        .map((word: any) => ({
-                            end_ms: Math.round(word.end * 1000),
-                            start_ms: Math.round(word.start * 1000),
-                            word: String(word.word).trim(),
-                        }))
-                        .filter((word: WordRecord) => word.word.length > 0);
-                    words.push(...cleanWords);
-
-                    const startMs =
-                        typeof seg.start === 'number'
-                            ? Math.round(seg.start * 1000)
-                            : typeof seg.offsets?.from === 'number'
-                              ? seg.offsets.from
-                              : cleanWords.length > 0
-                                ? cleanWords[0].start_ms
-                                : 0;
-                    const endMs =
-                        typeof seg.end === 'number'
-                            ? Math.round(seg.end * 1000)
-                            : typeof seg.offsets?.to === 'number'
-                              ? seg.offsets.to
-                              : cleanWords.length > 0
-                                ? cleanWords[cleanWords.length - 1].end_ms
-                                : startMs;
-                    const text =
-                        cleanWords.length > 0
-                            ? joinWords(cleanWords.map((word: WordRecord) => word.word))
-                            : String(seg.text).trim();
-                    return {
-                        end_ms: endMs,
-                        start_ms: startMs,
-                        text,
-                        video_id: videoId,
-                    };
-                })
-                .filter((seg) => seg.text.length > 0),
+                .map((seg) => toSegmentRecord(seg, videoId, words))
+                .filter((segment): segment is SegmentRecord => segment !== null),
             words,
         };
     } catch {
         return { language: null, segments: [], words: [] };
     }
+}
+
+function toSegmentRecord(seg: any, videoId: string, words: WordRecord[]): SegmentRecord | null {
+    if (typeof seg?.text !== 'string') {
+        return null;
+    }
+
+    const cleanWords = extractWordRecords(seg.words);
+    words.push(...cleanWords);
+    const bounds = resolveSegmentBounds(seg, cleanWords);
+    const text = cleanWords.length > 0 ? joinWords(cleanWords.map((word) => word.word)) : String(seg.text).trim();
+    if (text.length === 0) {
+        return null;
+    }
+
+    return {
+        end_ms: bounds.endMs,
+        start_ms: bounds.startMs,
+        text,
+        video_id: videoId,
+    };
+}
+
+function extractWordRecords(wordItems: unknown): WordRecord[] {
+    if (!Array.isArray(wordItems)) {
+        return [];
+    }
+    return wordItems
+        .filter((word: any) => isValidWhisperWord(word))
+        .map((word: any) => ({
+            end_ms: Math.round(word.end * 1000),
+            start_ms: Math.round(word.start * 1000),
+            word: String(word.word).trim(),
+        }))
+        .filter((word: WordRecord) => word.word.length > 0);
+}
+
+function isValidWhisperWord(word: any): boolean {
+    return (
+        typeof word?.word === 'string' &&
+        typeof word.start === 'number' &&
+        typeof word.end === 'number' &&
+        Number.isFinite(word.start) &&
+        Number.isFinite(word.end) &&
+        word.start >= 0 &&
+        word.end >= word.start
+    );
+}
+
+function resolveSegmentBounds(seg: any, cleanWords: WordRecord[]): { startMs: number; endMs: number } {
+    const startMs = getSegmentStartMs(seg, cleanWords);
+    const endMs = getSegmentEndMs(seg, cleanWords, startMs);
+    return { endMs, startMs };
+}
+
+function getSegmentStartMs(seg: any, cleanWords: WordRecord[]): number {
+    if (typeof seg.start === 'number') {
+        return Math.round(seg.start * 1000);
+    }
+    if (typeof seg.offsets?.from === 'number') {
+        return seg.offsets.from;
+    }
+    return cleanWords.length > 0 ? cleanWords[0].start_ms : 0;
+}
+
+function getSegmentEndMs(seg: any, cleanWords: WordRecord[], fallbackStartMs: number): number {
+    if (typeof seg.end === 'number') {
+        return Math.round(seg.end * 1000);
+    }
+    if (typeof seg.offsets?.to === 'number') {
+        return seg.offsets.to;
+    }
+    return cleanWords.length > 0 ? cleanWords[cleanWords.length - 1].end_ms : fallbackStartMs;
 }
 
 function buildCompactTranscriptJson(language: string, words: WordRecord[]): string {
@@ -689,56 +892,75 @@ async function ensureDataDirs(dataDir: string): Promise<DataDirs> {
 
 async function expandPaths(paths: string[]): Promise<string[]> {
     const results = new Set<string>();
-
-    const walk = async (inputPath: string, depth: number): Promise<void> => {
-        if (results.size >= MAX_EXPANDED_FILES) {
-            return;
-        }
-
-        const resolvedPath = resolve(inputPath);
-        if (!(await pathExists(resolvedPath))) {
-            console.warn(`[paths] Warning: path does not exist: ${resolvedPath}`);
-            return;
-        }
-
-        const stats = await stat(resolvedPath);
-        if (stats.isFile()) {
-            results.add(resolvedPath);
-            return;
-        }
-        if (!stats.isDirectory()) {
-            return;
-        }
-
-        if (depth >= MAX_EXPAND_DEPTH) {
-            console.warn(`[paths] Warning: max path expansion depth reached (${MAX_EXPAND_DEPTH}): ${resolvedPath}`);
-            return;
-        }
-
-        const entries = await readdir(resolvedPath, { withFileTypes: true });
-        for (const entry of entries) {
-            if (results.size >= MAX_EXPANDED_FILES) {
-                console.warn(`[paths] Warning: max expanded file limit reached (${MAX_EXPANDED_FILES})`);
-                return;
-            }
-            if (entry.isSymbolicLink()) {
-                continue;
-            }
-
-            const childPath = join(resolvedPath, entry.name);
-            if (entry.isDirectory()) {
-                await walk(childPath, depth + 1);
-            } else if (entry.isFile()) {
-                results.add(childPath);
-            }
-        }
-    };
-
     for (const inputPath of paths) {
-        await walk(inputPath, 0);
+        await walkExpandedPath(results, inputPath, 0);
     }
 
     return Array.from(results);
+}
+
+async function walkExpandedPath(results: Set<string>, inputPath: string, depth: number): Promise<void> {
+    if (hasReachedExpandedFileLimit(results)) {
+        return;
+    }
+
+    const resolvedPath = resolve(inputPath);
+    const stats = await getPathStatsOrWarn(resolvedPath);
+    if (!stats) {
+        return;
+    }
+    if (stats.isFile()) {
+        results.add(resolvedPath);
+        return;
+    }
+    if (!stats.isDirectory() || hasExceededExpandDepth(depth, resolvedPath)) {
+        return;
+    }
+    await walkDirectoryEntries(results, resolvedPath, depth);
+}
+
+async function walkDirectoryEntries(results: Set<string>, dirPath: string, depth: number): Promise<void> {
+    const entries = await readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+        if (hasReachedExpandedFileLimit(results, true)) {
+            return;
+        }
+        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+            continue;
+        }
+        const childPath = join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+            await walkExpandedPath(results, childPath, depth + 1);
+            continue;
+        }
+        results.add(childPath);
+    }
+}
+
+function hasReachedExpandedFileLimit(results: Set<string>, warn = false): boolean {
+    if (results.size < MAX_EXPANDED_FILES) {
+        return false;
+    }
+    if (warn) {
+        console.warn(`[paths] Warning: max expanded file limit reached (${MAX_EXPANDED_FILES})`);
+    }
+    return true;
+}
+
+async function getPathStatsOrWarn(path: string): Promise<Awaited<ReturnType<typeof stat>> | null> {
+    if (!(await pathExists(path))) {
+        console.warn(`[paths] Warning: path does not exist: ${path}`);
+        return null;
+    }
+    return stat(path);
+}
+
+function hasExceededExpandDepth(depth: number, path: string): boolean {
+    if (depth < MAX_EXPAND_DEPTH) {
+        return false;
+    }
+    console.warn(`[paths] Warning: max path expansion depth reached (${MAX_EXPAND_DEPTH}): ${path}`);
+    return true;
 }
 
 async function readUrlFile(filePath: string): Promise<string[]> {

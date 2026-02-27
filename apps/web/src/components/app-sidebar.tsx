@@ -5,6 +5,7 @@ import {
     IconListDetails,
     IconPlus,
     IconRefresh,
+    IconSettings,
     IconVideo,
 } from '@tabler/icons-react';
 import type { ComponentProps } from 'react';
@@ -66,6 +67,11 @@ export function AppSidebar({ onRefresh, onViewChange, queuedCount, transcriptCou
             icon: IconChartBar,
             id: 'analytics',
             title: 'Analytics',
+        },
+        {
+            icon: IconSettings,
+            id: 'settings',
+            title: 'Settings',
         },
     ];
 

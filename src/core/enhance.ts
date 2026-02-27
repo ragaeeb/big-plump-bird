@@ -114,63 +114,16 @@ function skippedResult(
 // ---------------------------------------------------------------------------
 
 export async function checkEnhancementAvailable(config: EnhancementConfig): Promise<void> {
-    const availabilityCacheKey = [
-        resolvePython(config),
-        resolveScript('analyze_audio.py'),
-        resolveScript('process_audio.py'),
-        config.mode === 'analyze-only' ? 'analyze-only' : resolveDeepFilter(config),
-    ].join('|');
+    const availabilityCacheKey = buildAvailabilityCacheKey(config);
     if (enhancementAvailableCacheKey === availabilityCacheKey) {
         return;
     }
 
     const py = resolvePython(config);
-    if (!(await pathExists(py))) {
-        throw new Error(
-            `Enhancement Python binary not found at ${py}.\nSet up the environment:\n  bun run setup-enhance`,
-        );
-    }
-    for (const script of ['analyze_audio.py', 'process_audio.py']) {
-        const p = resolveScript(script);
-        if (!(await pathExists(p))) {
-            throw new Error(`Enhancement script not found: ${p}`);
-        }
-    }
-
-    // Fast-fail on missing python dependencies.
-    const sanity = await runCommand(py, [
-        '-c',
-        [
-            'import numpy, soundfile, scipy, torch, torchaudio, ruptures, nara_wpe, silero_vad',
-            'raise SystemExit(0)',
-        ].join(';'),
-    ]);
-    if (sanity.exitCode !== 0) {
-        const detail = sanity.stderr.trim() || sanity.stdout.trim();
-        throw new Error(
-            'Enhancement environment is not healthy. Reinstall with:\n' +
-                '  bun run setup-enhance\n' +
-                'If the issue persists, remove `tools/enhance/.venv` and run setup again.\n' +
-                (detail ? `Details: ${detail}` : ''),
-        );
-    }
-
-    if (config.mode !== 'analyze-only') {
-        const deepFilter = resolveDeepFilter(config);
-        if (!(await pathExists(deepFilter))) {
-            throw new Error(
-                `deep-filter binary not found at ${deepFilter}.\nInstall it with:\n  bun run setup-enhance`,
-            );
-        }
-        const deepFilterVersion = await runCommand(deepFilter, ['--version']);
-        if (deepFilterVersion.exitCode !== 0) {
-            const detail = deepFilterVersion.stderr.trim() || deepFilterVersion.stdout.trim();
-            throw new Error(
-                `deep-filter is not executable at ${deepFilter}.\nReinstall with:\n  bun run setup-enhance` +
-                    (detail ? `\nDetails: ${detail}` : ''),
-            );
-        }
-    }
+    await ensurePythonBinaryExists(py);
+    await ensureEnhancementScriptsExist();
+    await ensureEnhancementPythonHealthy(py);
+    await ensureDeepFilterReady(config);
 
     enhancementAvailableCacheKey = availabilityCacheKey;
 }
@@ -286,67 +239,33 @@ export async function maybeEnhanceAudio(opts: {
     const enhancedPath = join(workDir, 'enhanced.wav');
     const resultPath = join(workDir, 'result.json');
 
-    // --- Step 1: Analysis (or load existing plan) ---
-    let analysis: AudioAnalysis;
-
-    if (planInDir) {
-        const planFile = join(planInDir, `${videoId}.json`);
-        if (await pathExists(planFile)) {
-            console.log(`[enhance] Loading plan from ${planFile}`);
-            analysis = JSON.parse(await readFile(planFile, 'utf-8')) as AudioAnalysis;
-        } else {
-            console.log(`[enhance] No plan for ${videoId}, running analysis`);
-            analysis = await analyzeAudio({
-                config,
-                outputPath: analysisPath,
-                wavPath: rawWavPath,
-            });
-        }
-    } else {
-        analysis = await analyzeAudio({
-            config,
-            outputPath: analysisPath,
-            wavPath: rawWavPath,
-        });
-    }
+    const analysis = await resolveAnalysis({
+        analysisPath,
+        config,
+        planInDir,
+        videoId,
+        wavPath: rawWavPath,
+    });
 
     artifacts.push({ kind: 'enhancement_analysis_json', path: analysisPath });
 
-    // Save plan for review if requested
-    if (planOutDir) {
-        await ensureDir(planOutDir);
-        const planFile = join(planOutDir, `${videoId}.json`);
-        await writeFile(planFile, JSON.stringify(analysis, null, 2));
-        artifacts.push({ kind: 'enhancement_plan_json', path: planFile });
-    }
+    await maybeWritePlanOut({ analysis, artifacts, planOutDir, videoId });
 
-    // --- analyze-only: stop here ---
     if (config.mode === 'analyze-only') {
         return skippedResult(rawWavPath, 'analyze-only', 'analyze_only_mode', analysis, artifacts, startedAt);
     }
 
-    // --- Step 2: SNR gate ---
-    if (config.mode === 'auto' && analysis.snr_db !== null && analysis.snr_db >= config.snrSkipThresholdDb) {
-        const reason = `snr_above_threshold (${analysis.snr_db.toFixed(1)} >= ${config.snrSkipThresholdDb})`;
+    const skipReason = getSnrSkipReason(config, analysis);
+    if (skipReason) {
+        const reason = `snr_above_threshold (${skipReason})`;
         console.log(`[enhance] Skipping: ${reason}`);
         return skippedResult(rawWavPath, 'auto', reason, analysis, artifacts, startedAt);
     }
 
-    // --- Step 3: Apply source-class overrides ---
-    if (config.sourceClass === 'far-field' || config.sourceClass === 'podium') {
-        for (const regime of analysis.regimes) {
-            regime.recommended.dereverb = true;
-        }
-    }
+    applySourceClassOverrides(analysis, config);
 
-    for (const regime of analysis.regimes) {
-        regime.recommended.atten_lim_db = config.attenLimDb;
-    }
-
-    // Persist the (possibly mutated) analysis for the process script
     await writeFile(analysisPath, JSON.stringify(analysis, null, 2));
 
-    // --- Step 4: Process ---
     console.log(
         `[enhance] Processing ${videoId} ` +
             `(SNR: ${analysis.snr_db?.toFixed(1) ?? 'N/A'}dB, ` +
@@ -374,4 +293,124 @@ export async function maybeEnhanceAudio(opts: {
         startedAt,
         wavPath: enhancedPath,
     };
+}
+
+function buildAvailabilityCacheKey(config: EnhancementConfig): string {
+    return [
+        resolvePython(config),
+        resolveScript('analyze_audio.py'),
+        resolveScript('process_audio.py'),
+        config.mode === 'analyze-only' ? 'analyze-only' : resolveDeepFilter(config),
+    ].join('|');
+}
+
+async function ensurePythonBinaryExists(py: string): Promise<void> {
+    if (await pathExists(py)) {
+        return;
+    }
+    throw new Error(`Enhancement Python binary not found at ${py}.\nSet up the environment:\n  bun run setup-enhance`);
+}
+
+async function ensureEnhancementScriptsExist(): Promise<void> {
+    for (const script of ['analyze_audio.py', 'process_audio.py']) {
+        const path = resolveScript(script);
+        if (!(await pathExists(path))) {
+            throw new Error(`Enhancement script not found: ${path}`);
+        }
+    }
+}
+
+async function ensureEnhancementPythonHealthy(py: string): Promise<void> {
+    const sanity = await runCommand(py, [
+        '-c',
+        [
+            'import numpy, soundfile, scipy, torch, torchaudio, ruptures, nara_wpe, silero_vad',
+            'raise SystemExit(0)',
+        ].join(';'),
+    ]);
+    if (sanity.exitCode === 0) {
+        return;
+    }
+
+    const detail = sanity.stderr.trim() || sanity.stdout.trim();
+    throw new Error(
+        'Enhancement environment is not healthy. Reinstall with:\n' +
+            '  bun run setup-enhance\n' +
+            'If the issue persists, remove `tools/enhance/.venv` and run setup again.\n' +
+            (detail ? `Details: ${detail}` : ''),
+    );
+}
+
+async function ensureDeepFilterReady(config: EnhancementConfig): Promise<void> {
+    if (config.mode === 'analyze-only') {
+        return;
+    }
+    const deepFilter = resolveDeepFilter(config);
+    if (!(await pathExists(deepFilter))) {
+        throw new Error(`deep-filter binary not found at ${deepFilter}.\nInstall it with:\n  bun run setup-enhance`);
+    }
+    const deepFilterVersion = await runCommand(deepFilter, ['--version']);
+    if (deepFilterVersion.exitCode === 0) {
+        return;
+    }
+    const detail = deepFilterVersion.stderr.trim() || deepFilterVersion.stdout.trim();
+    throw new Error(
+        `deep-filter is not executable at ${deepFilter}.\nReinstall with:\n  bun run setup-enhance` +
+            (detail ? `\nDetails: ${detail}` : ''),
+    );
+}
+
+async function resolveAnalysis(opts: {
+    videoId: string;
+    wavPath: string;
+    analysisPath: string;
+    config: EnhancementConfig;
+    planInDir?: string;
+}): Promise<AudioAnalysis> {
+    const { videoId, wavPath, analysisPath, config, planInDir } = opts;
+    if (!planInDir) {
+        return analyzeAudio({ config, outputPath: analysisPath, wavPath });
+    }
+
+    const planFile = join(planInDir, `${videoId}.json`);
+    if (await pathExists(planFile)) {
+        console.log(`[enhance] Loading plan from ${planFile}`);
+        return JSON.parse(await readFile(planFile, 'utf-8')) as AudioAnalysis;
+    }
+
+    console.log(`[enhance] No plan for ${videoId}, running analysis`);
+    return analyzeAudio({ config, outputPath: analysisPath, wavPath });
+}
+
+async function maybeWritePlanOut(opts: {
+    analysis: AudioAnalysis;
+    artifacts: Array<{ kind: string; path: string }>;
+    planOutDir?: string;
+    videoId: string;
+}): Promise<void> {
+    const { analysis, artifacts, planOutDir, videoId } = opts;
+    if (!planOutDir) {
+        return;
+    }
+    await ensureDir(planOutDir);
+    const planFile = join(planOutDir, `${videoId}.json`);
+    await writeFile(planFile, JSON.stringify(analysis, null, 2));
+    artifacts.push({ kind: 'enhancement_plan_json', path: planFile });
+}
+
+function getSnrSkipReason(config: EnhancementConfig, analysis: AudioAnalysis): string | null {
+    if (config.mode !== 'auto' || analysis.snr_db === null || analysis.snr_db < config.snrSkipThresholdDb) {
+        return null;
+    }
+    return `${analysis.snr_db.toFixed(1)} >= ${config.snrSkipThresholdDb}`;
+}
+
+function applySourceClassOverrides(analysis: AudioAnalysis, config: EnhancementConfig): void {
+    const forceDereverb = config.sourceClass === 'far-field' || config.sourceClass === 'podium';
+    for (const regime of analysis.regimes) {
+        if (forceDereverb) {
+            regime.recommended.dereverb = true;
+        }
+        regime.recommended.atten_lim_db = config.attenLimDb;
+    }
 }
