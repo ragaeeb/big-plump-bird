@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/ragaeeb/big-plump-bird/compare/v1.0.1...v1.1.0) (2026-02-27)
+
+
+### Features
+
+* **tafrigh:** add tafrigh transcription engine support ([#42](https://github.com/ragaeeb/big-plump-bird/issues/42)) ([05130ac](https://github.com/ragaeeb/big-plump-bird/commit/05130ace4120a2e2f30607c730da931aecd77208))
+
 ## [1.0.1](https://github.com/ragaeeb/big-plump-bird/compare/v1.0.0...v1.0.1) (2026-02-26)
 
 
