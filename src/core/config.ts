@@ -5,6 +5,7 @@ export type EnhancementMode = 'off' | 'auto' | 'on' | 'analyze-only';
 export type SourceClass = 'auto' | 'studio' | 'podium' | 'far-field' | 'cassette';
 export type DereverbMode = 'off' | 'auto' | 'on';
 export type FailPolicy = 'fallback_raw' | 'fail';
+export type TranscriptionEngine = 'whisperx' | 'tafrigh';
 
 export type EnhancementConfig = {
     mode: EnhancementMode;
@@ -41,6 +42,7 @@ export const DEFAULT_ENHANCEMENT_CONFIG: EnhancementConfig = {
 export type RunConfig = {
     dataDir: string;
     dbPath: string;
+    engine: TranscriptionEngine;
     modelPath: string;
     whisperxComputeType: 'float16' | 'float32' | 'int8';
     whisperxBatchSize: number;
@@ -55,6 +57,7 @@ export type RunConfig = {
     sourceAudioMaxAbrKbps: number;
     outputFormats: string[];
     enhancement: EnhancementConfig;
+    witAiApiKeys: string[];
 };
 
 export const DEFAULT_CONFIG: RunConfig = {
@@ -62,6 +65,7 @@ export const DEFAULT_CONFIG: RunConfig = {
     dataDir: 'data',
     dbPath: 'data/bpb.sqlite',
     downloadVideo: false,
+    engine: 'whisperx',
     enhancement: DEFAULT_ENHANCEMENT_CONFIG,
     jobs: 1,
     keepSourceAudio: true,
@@ -74,6 +78,7 @@ export const DEFAULT_CONFIG: RunConfig = {
     sourceAudioMaxAbrKbps: 128,
     whisperxBatchSize: 1,
     whisperxComputeType: 'float32',
+    witAiApiKeys: [],
 };
 
 const WHISPERX_COMPUTE_TYPES = new Set(['float16', 'float32', 'int8']);
@@ -81,6 +86,7 @@ const ENHANCEMENT_MODES = new Set(['off', 'auto', 'on', 'analyze-only']);
 const SOURCE_CLASSES = new Set(['auto', 'studio', 'podium', 'far-field', 'cassette']);
 const DEREVERB_MODES = new Set(['off', 'auto', 'on']);
 const FAIL_POLICIES = new Set(['fallback_raw', 'fail']);
+const TRANSCRIPTION_ENGINES = new Set(['whisperx', 'tafrigh']);
 
 export async function loadConfig(configPath: string): Promise<RunConfig> {
     const absoluteConfigPath = resolve(configPath);
@@ -100,6 +106,7 @@ export async function loadConfig(configPath: string): Promise<RunConfig> {
                 ...(parsed.enhancement ?? {}),
             },
             outputFormats: parsed.outputFormats ?? DEFAULT_CONFIG.outputFormats,
+            witAiApiKeys: parsed.witAiApiKeys ?? DEFAULT_CONFIG.witAiApiKeys,
         },
         configDir,
     );
@@ -132,6 +139,15 @@ function validateConfig(config: RunConfig): RunConfig {
     }
     if (typeof config.dataDir !== 'string' || config.dataDir.trim().length === 0) {
         throw new Error('Invalid config: dataDir is required.');
+    }
+    if (!TRANSCRIPTION_ENGINES.has(config.engine)) {
+        throw new Error(`Invalid config: engine must be one of ${Array.from(TRANSCRIPTION_ENGINES).join(', ')}.`);
+    }
+    if (config.engine === 'tafrigh' && config.witAiApiKeys.length === 0) {
+        throw new Error('Invalid config: witAiApiKeys must be a non-empty array when engine is "tafrigh".');
+    }
+    if (!Array.isArray(config.witAiApiKeys) || config.witAiApiKeys.some((k) => typeof k !== 'string')) {
+        throw new Error('Invalid config: witAiApiKeys must be an array of strings.');
     }
     if (typeof config.modelPath !== 'string' || config.modelPath.trim().length === 0) {
         throw new Error('Invalid config: modelPath is required.');

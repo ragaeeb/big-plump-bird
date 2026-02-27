@@ -3,6 +3,7 @@
     "dataDir": "data",
     "dbPath": "data/bpb.sqlite",
     "downloadVideo": false,
+    "engine": "whisperx",
     "enhancement": {
         "attenLimDb": 12,
         "deepFilterBin": "tools/enhance/bin/deep-filter",
@@ -28,5 +29,6 @@
     "sourceAudioFormat": "opus-webm",
     "sourceAudioMaxAbrKbps": 128,
     "whisperxBatchSize": 1,
-    "whisperxComputeType": "float32"
+    "whisperxComputeType": "float32",
+    "witAiApiKeys": []
 }

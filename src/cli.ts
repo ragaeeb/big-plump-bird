@@ -15,8 +15,9 @@ Options:
   --paths <path>                 File or directory to process (repeatable)
   --urls <path>                  Text file with one URL per line
   --url <url>                    URL input (video/playlist/channel; repeatable)
-  --language <lang>              Whisper language (default: en)
-  --model <name_or_path>         WhisperX model (default: turbo)
+  --engine <engine>              Transcription engine: whisperx|tafrigh (default: whisperx)
+  --language <lang>              Language code (default: en)
+  --model <name_or_path>         WhisperX model (default: turbo; ignored for tafrigh)
   --whisperx-compute-type <type> WhisperX compute type: int8|float16|float32
   --whisperx-batch-size <n>      WhisperX batch size
   --auto-download-model <bool>   Auto-download missing local model files
@@ -29,6 +30,10 @@ Options:
   --force                         Reprocess even if transcript exists
   --dry-run                       Show planned operations without running commands
   -h, --help                      Show help
+
+Tafrigh (wit.ai cloud engine):
+  --wit-ai-api-keys <keys>       Comma-separated wit.ai API keys (required when --engine tafrigh)
+                                 Can also be set via WIT_AI_API_KEYS env var (space-separated)
 
 Enhancement:
   --enhance <mode>               off|auto|on|analyze-only (default: off)
@@ -196,10 +201,29 @@ async function main() {
                 : enhanceBase.sourceClass,
     };
 
+    // Resolve wit.ai API keys: CLI flag > env var > config file
+    const witAiApiKeys = (() => {
+        const fromFlag = toArray(parsed.flags['wit-ai-api-keys'], true)
+            .map((k) => k.trim())
+            .filter(Boolean);
+        if (fromFlag.length > 0) {
+            return fromFlag;
+        }
+        const fromEnv = (process.env.WIT_AI_API_KEYS ?? '').trim();
+        if (fromEnv.length > 0) {
+            return fromEnv.split(/\s+/).filter(Boolean);
+        }
+        return baseConfig.witAiApiKeys;
+    })();
+
+    const engine =
+        typeof parsed.flags.engine === 'string' ? (parsed.flags.engine as typeof baseConfig.engine) : baseConfig.engine;
+
     const config = {
         ...baseConfig,
         autoDownloadModel: toBoolean(parsed.flags['auto-download-model'], baseConfig.autoDownloadModel),
         downloadVideo: toBoolean(parsed.flags['download-video'], baseConfig.downloadVideo),
+        engine,
         enhancement,
         jobs: (() => {
             const parsedJobs = toNumber(parsed.flags.jobs, baseConfig.jobs);
@@ -225,6 +249,7 @@ async function main() {
             typeof parsed.flags['whisperx-compute-type'] === 'string'
                 ? (parsed.flags['whisperx-compute-type'] as typeof baseConfig.whisperxComputeType)
                 : baseConfig.whisperxComputeType,
+        witAiApiKeys,
     };
 
     if (parsed.command === 'run') {

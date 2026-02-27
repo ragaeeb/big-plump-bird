@@ -18,6 +18,7 @@ import {
 import type { EnhancementResult } from './enhance';
 import { checkEnhancementAvailable, maybeEnhanceAudio } from './enhance';
 import { convertToWav } from './ffmpeg';
+import { runTafrigh } from './tafrigh';
 import { ensureDir, pathExists, sha256String } from './utils';
 import { ensureWhisperXAvailable, runWhisperX } from './whisperx';
 import { downloadAudio, expandYtDlpUrls, getYtDlpId } from './yt_dlp';
@@ -56,7 +57,7 @@ export async function runPipeline(config: RunConfig, options: RunOptions): Promi
             return;
         }
 
-        if (!options.dryRun) {
+        if (!options.dryRun && config.engine !== 'tafrigh') {
             await ensureWhisperXAvailable();
         }
 
@@ -173,11 +174,12 @@ async function processInput(
                 deleteVideoData(db, videoId);
             }
 
+            const runModelPath = config.engine === 'tafrigh' ? 'tafrigh' : config.modelPath;
             upsertVideo(db, {
                 created_at: now,
                 run_enhancement_json: JSON.stringify(config.enhancement),
                 run_language: config.language,
-                run_model_path: config.modelPath,
+                run_model_path: runModelPath,
                 run_output_formats_json: JSON.stringify(config.outputFormats),
                 source_type: 'url',
                 source_uri: url,
@@ -207,7 +209,7 @@ async function processInput(
                 metadata_json: infoJson,
                 run_enhancement_json: JSON.stringify(config.enhancement),
                 run_language: config.language,
-                run_model_path: config.modelPath,
+                run_model_path: runModelPath,
                 run_output_formats_json: JSON.stringify(config.outputFormats),
                 source_type: 'url',
                 source_uri: url,
@@ -262,12 +264,13 @@ async function processInput(
             deleteVideoData(db, videoId);
         }
 
+        const runModelPath = config.engine === 'tafrigh' ? 'tafrigh' : config.modelPath;
         upsertVideo(db, {
             created_at: now,
             local_path: filePath,
             run_enhancement_json: JSON.stringify(config.enhancement),
             run_language: config.language,
-            run_model_path: config.modelPath,
+            run_model_path: runModelPath,
             run_output_formats_json: JSON.stringify(config.outputFormats),
             source_type: 'file',
             source_uri: filePath,
@@ -356,47 +359,89 @@ async function transcribeAndStore(opts: {
         }
     }
 
-    await runWhisperX({
-        batchSize: config.whisperxBatchSize,
-        computeType: config.whisperxComputeType,
-        formats: config.outputFormats.map((f) => f.toLowerCase()),
-        language: config.language,
-        modelPath: config.modelPath,
-        outputBase,
-        wavPath: wavForWhisper,
-    });
+    let segments: SegmentRecord[];
+    let words: WordRecord[];
+    let transcriptLanguage: string;
+    let transcriptModel: string;
+    let transcriptText: string;
+    const artifacts: ArtifactRecord[] = [];
 
-    const txtPath = `${outputBase}.txt`;
-    const jsonPath = `${outputBase}.json`;
+    if (config.engine === 'tafrigh') {
+        const tafrighResult = await runTafrigh(wavForWhisper, config.witAiApiKeys, videoId, config.language);
+        segments = tafrighResult.segments;
+        words = tafrighResult.words;
+        transcriptLanguage = tafrighResult.language;
+        transcriptModel = 'tafrigh';
+        transcriptText =
+            wordsToText(words) ||
+            segments
+                .map((s) => s.text)
+                .join(' ')
+                .trim();
+    } else {
+        await runWhisperX({
+            batchSize: config.whisperxBatchSize,
+            computeType: config.whisperxComputeType,
+            formats: config.outputFormats.map((f) => f.toLowerCase()),
+            language: config.language,
+            modelPath: config.modelPath,
+            outputBase,
+            wavPath: wavForWhisper,
+        });
 
-    const [txtExists, jsonExists] = await Promise.all([pathExists(txtPath), pathExists(jsonPath)]);
+        const txtPath = `${outputBase}.txt`;
+        const jsonPath = `${outputBase}.json`;
 
-    const text = txtExists ? await readFile(txtPath, 'utf-8') : '';
-    const json = jsonExists ? await readFile(jsonPath, 'utf-8') : '';
-    const parsedWhisper = json ? parseWhisperOutput(json, videoId) : null;
-    const segments = parsedWhisper?.segments ?? [];
-    const words = parsedWhisper?.words ?? [];
-    const transcriptText =
-        text ||
-        wordsToText(words) ||
-        segments
-            .map((s) => s.text)
-            .join(' ')
-            .trim();
-    const compactTranscriptJson = buildCompactTranscriptJson(parsedWhisper?.language ?? config.language, words);
+        const [txtExists, jsonExists] = await Promise.all([pathExists(txtPath), pathExists(jsonPath)]);
+
+        const text = txtExists ? await readFile(txtPath, 'utf-8') : '';
+        const json = jsonExists ? await readFile(jsonPath, 'utf-8') : '';
+        const parsedWhisper = json ? parseWhisperOutput(json, videoId) : null;
+        segments = parsedWhisper?.segments ?? [];
+        words = parsedWhisper?.words ?? [];
+        transcriptLanguage = parsedWhisper?.language ?? config.language;
+        transcriptModel = basename(config.modelPath);
+        transcriptText =
+            text ||
+            wordsToText(words) ||
+            segments
+                .map((s) => s.text)
+                .join(' ')
+                .trim();
+
+        if (txtExists) {
+            artifacts.push({
+                created_at: new Date().toISOString(),
+                kind: 'transcript_txt',
+                size_bytes: await fileSize(txtPath),
+                uri: txtPath,
+                video_id: videoId,
+            });
+        }
+
+        if (jsonExists) {
+            artifacts.push({
+                created_at: new Date().toISOString(),
+                kind: 'transcript_json',
+                size_bytes: await fileSize(jsonPath),
+                uri: jsonPath,
+                video_id: videoId,
+            });
+        }
+    }
+
+    const compactTranscriptJson = buildCompactTranscriptJson(transcriptLanguage, words);
 
     insertTranscript(db, {
         created_at: new Date().toISOString(),
         json: compactTranscriptJson,
-        language: parsedWhisper?.language ?? config.language,
-        model: basename(config.modelPath),
+        language: transcriptLanguage,
+        model: transcriptModel,
         text: transcriptText,
         video_id: videoId,
     });
 
     insertSegments(db, segments);
-
-    const artifacts: ArtifactRecord[] = [];
 
     if (config.keepWav && (await pathExists(wavPath))) {
         artifacts.push({
@@ -424,26 +469,6 @@ async function transcribeAndStore(opts: {
             kind: 'source_info_json',
             size_bytes: await fileSize(infoJsonPath),
             uri: infoJsonPath,
-            video_id: videoId,
-        });
-    }
-
-    if (txtExists) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'transcript_txt',
-            size_bytes: await fileSize(txtPath),
-            uri: txtPath,
-            video_id: videoId,
-        });
-    }
-
-    if (jsonExists) {
-        artifacts.push({
-            created_at: new Date().toISOString(),
-            kind: 'transcript_json',
-            size_bytes: await fileSize(jsonPath),
-            uri: jsonPath,
             video_id: videoId,
         });
     }
